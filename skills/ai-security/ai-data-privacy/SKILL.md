@@ -13,7 +13,7 @@ phase: [design, build, review, operate]
 frameworks: [NIST-AI-RMF-1.0, OWASP-LLM02-2025]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -73,6 +73,8 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 |---|---|---|
 | Data flow diagram for the AI system | Architecture docs, design docs | Maps where personal data enters, persists, and exits |
 | LLM provider and terms of service | Vendor contracts, API docs, DPAs | Determines whether user data is used for provider training |
+| Provider routing and fallback configuration | AI gateway code, SDK configuration, feature flags, vendor routing policies | Confirms personal data stays within approved processors, regions, and model paths |
+| Prompt/completion cache configuration | AI gateway config, SDK parameters, cache stores, observability settings | Shows whether prompts, completions, and embeddings persist outside approved retention or residency boundaries |
 | Data processing agreements (DPAs) | Legal/compliance documentation | Establishes legal basis for data processing |
 | Privacy policy | Public-facing policy documents | Defines commitments to users about data handling |
 | Data retention policies | Internal governance docs, code configs | Determines how long AI-processed data persists |
@@ -180,7 +182,73 @@ Grep: "metadata_filter|access_control|permission|authorization|tenant" in **/*.{
 
 ---
 
-### Step 3 -- Data Retention Policies
+### Step 3 -- Provider Routing, Fallback, and Prompt-Cache Residency
+
+Assess whether every provider path that can receive personal data preserves the approved privacy boundary, including failover providers, model-routing layers, prompt caches, completion caches, and observability copies.
+
+**What to look for in code and configuration:**
+
+- AI gateway, model router, or SDK code that can route requests to multiple providers, accounts, regions, projects, or model families.
+- Fallback behavior that silently changes from an approved regional processor to a public, global, or differently contracted provider.
+- Prompt/completion cache features that persist personal data, PHI, financial data, source documents, or embeddings without a documented TTL, encryption, tenant boundary, and residency location.
+- Cache keys or semantic caches that are shared across tenants, workspaces, environments, or data classes.
+- Provider-specific flags for data use, training opt-out, abuse monitoring, zero-retention eligibility, cache control, or enterprise privacy settings that are absent from production configuration.
+- Logging, tracing, or evaluation pipelines that receive full prompt/completion payloads after the main provider path has redacted or region-constrained the request.
+
+**Detection methods using allowed tools:**
+
+```
+# Find provider routing and fallback code
+Grep: "provider|router|routing|fallback|failover|model_selector|modelRegistry|model_registry" in **/*.{py,ts,js,yaml,yml,json}
+Grep: "baseURL|base_url|endpoint|deployment|region|location|project_id|tenant_id" in **/*.{py,ts,js,yaml,yml,json,env}
+Grep: "openai|azure.openai|anthropic|bedrock|vertex|cohere|mistral|llm_gateway" in **/*.{py,ts,js,yaml,yml,json,env}
+
+# Check prompt, completion, embedding, and semantic caches
+Grep: "prompt_cache|completion_cache|semantic_cache|cache_control|ephemeral|ttl|expire|redis|memcached" in **/*.{py,ts,js,yaml,yml,json}
+Grep: "conversation_cache|message_cache|response_cache|embedding_cache|vector_cache" in **/*.{py,ts,js,yaml,yml,json}
+
+# Check privacy, residency, and provider-data-use settings
+Grep: "data_residency|residency|zero_data_retention|training_opt_out|abuse_monitoring|data_usage" in **/*.{py,ts,js,yaml,yml,json,env}
+Grep: "redact|pii|phi|tokenize|minimize|mask" in **/*.{py,ts,js,yaml,yml,json}
+```
+
+**Provider routing evidence gate:** For each path that can receive personal data, require evidence for all of the following before classifying the path as compliant:
+
+| Evidence Item | Required Evidence |
+|---|---|
+| Approved processor and contract | DPA, BAA where applicable, enterprise terms, or documented legal approval for the provider account |
+| Region and residency | Endpoint, project, deployment, or account configuration proving the request stays in the approved jurisdiction |
+| Data minimization before transmission | Redaction, tokenization, field filtering, or documented reason why raw personal data is necessary |
+| Provider data use setting | Evidence that training, retention, abuse monitoring, or support access settings match policy commitments |
+| Fallback equivalence | Failover providers preserve the same privacy commitments, region, retention, and logging controls |
+| Tenant boundary | Routing and cache keys include tenant/workspace isolation where multi-tenant data is processed |
+| Owner and change control | Named owner, approval record, and trigger for reassessing provider or region changes |
+
+**Prompt-cache residency gate:** Treat prompt, completion, embedding, and semantic caches as data stores. Verify:
+
+- what payload fields are cached before and after redaction;
+- whether cache entries include personal data, PHI, secrets, source documents, embeddings, or derived summaries;
+- where the cache is physically hosted and whether that location matches residency commitments;
+- whether cache entries have TTLs aligned with the legal basis and user-facing retention policy;
+- whether cache entries are encrypted, access-controlled, tenant-scoped, and deleted when source data or user consent is revoked;
+- whether observability, evaluation, replay, or debugging copies bypass the primary cache TTL.
+
+**What constitutes a finding:**
+
+| Condition | Severity |
+|---|---|
+| Regulated personal data can fail over to an unapproved provider, account, or region | Critical |
+| PHI or financial personal data is cached outside the approved residency or retention boundary | Critical |
+| Prompt/completion cache stores personal data with no TTL, owner, or deletion propagation | High |
+| Fallback provider lacks equivalent DPA, BAA, training opt-out, or data-retention controls | High |
+| Semantic or prompt cache is shared across tenants or environments without isolation | High |
+| Logging/tracing/evaluation copies retain raw prompts after the main path redacts or deletes them | High |
+| Provider routing matrix is missing for a multi-provider AI system | Medium |
+| Provider privacy settings are documented but not enforced in deployable configuration | Medium |
+
+---
+
+### Step 4 -- Data Retention Policies
 
 Assess whether AI-specific data stores have appropriate retention policies, deletion mechanisms, and lifecycle management.
 
@@ -240,7 +308,7 @@ Grep: "backup|snapshot|archive" in **/*.{yaml,yml,json,toml}
 
 ---
 
-### Step 4 -- Model Memorization Risk Assessment
+### Step 5 -- Model Memorization Risk Assessment
 
 Evaluate the risk that models deployed in the system have memorized and can reproduce personal data from their training corpus.
 
@@ -288,7 +356,7 @@ Grep: "dedup|deduplicate|exact_match|near_duplicate|minhash|simhash" in **/*.py
 
 ---
 
-### Step 5 -- EU AI Act Data Governance Requirements
+### Step 6 -- EU AI Act Data Governance Requirements
 
 Assess compliance with the EU AI Act's data governance requirements for AI systems deployed in or affecting EU residents.
 
@@ -338,7 +406,7 @@ Glob: **/technical_documentation*
 
 ---
 
-### Step 6 -- Consent Management for AI Training Data
+### Step 7 -- Consent Management for AI Training Data
 
 Assess whether consent mechanisms for AI training data usage are implemented, enforceable, and aligned with regulatory requirements.
 
@@ -384,8 +452,8 @@ Grep: "consent_check|is_consented|has_consent|filter_consented|exclude_opted_out
 | Severity | Criteria | Response SLA |
 |---|---|---|
 | **Critical** | Personal data processed without legal basis, PHI exposed without HIPAA controls, or regulatory non-compliance with immediate enforcement risk. | Immediate -- halt processing |
-| **High** | Significant privacy risk with clear exposure path: PII in prompts without redaction, missing retention policies on PII-containing stores, or no consent mechanism for training data. | 7 days -- remediate before next release |
-| **Medium** | Moderate privacy gap requiring specific conditions: incomplete documentation, missing memorization testing, or partial consent implementation. | 30 days -- schedule remediation |
+| **High** | Significant privacy risk with clear exposure path: PII in prompts without redaction, unapproved provider fallback, prompt caches outside retention controls, missing retention policies on PII-containing stores, or no consent mechanism for training data. | 7 days -- remediate before next release |
+| **Medium** | Moderate privacy gap requiring specific conditions: incomplete documentation, missing routing matrix, missing memorization testing, or partial consent implementation. | 30 days -- schedule remediation |
 | **Low** | Minor gap with limited direct privacy risk: defense-in-depth recommendations, documentation improvements, or best practice deviations. | 90 days -- track in backlog |
 | **Informational** | Recommendations for improvement with no current privacy risk. | No SLA -- advisory |
 
@@ -408,10 +476,16 @@ Grep: "consent_check|is_consented|has_consent|filter_consented|exclude_opted_out
 [Description or reference to diagram showing personal data flows through AI components:
 user input -> prompt assembly -> LLM API -> completion -> output -> logging/storage]
 
+## Provider Routing and Prompt-Cache Matrix
+
+| Path | Provider/account/region | Data classes sent | Redaction before send | Fallback allowed | Cache/log location | TTL/deletion path | Gaps |
+|---|---|---|---|---|---|---|---|
+| [primary/fallback/eval/logging path] | [provider, account, deployment, region] | [PII/PHI/none] | [Yes/No/Partial] | [No/Yes with equivalent controls] | [store and residency] | [duration and deletion trigger] | [finding refs] |
+
 ## Findings
 
 ### Finding [N]: [Title]
-- **Category:** [Training Data | Prompt/Completion PII | Data Retention | Memorization | EU AI Act | Consent]
+- **Category:** [Training Data | Prompt/Completion PII | Provider Routing | Prompt Cache | Data Retention | Memorization | EU AI Act | Consent]
 - **Severity:** [Critical | High | Medium | Low | Informational]
 - **OWASP LLM Category:** LLM02:2025 -- Sensitive Information Disclosure
 - **NIST AI RMF Function:** [GOVERN | MAP | MEASURE | MANAGE] [subcategory]
@@ -429,6 +503,8 @@ user input -> prompt assembly -> LLM API -> completion -> output -> logging/stor
 |---|---|---|---|
 | Training data privacy | [Yes/Partial/No] | [description] | [severity] |
 | PII in prompts/completions | [Yes/Partial/No] | [description] | [severity] |
+| Provider routing and fallback | [Yes/Partial/No/N/A] | [description] | [severity] |
+| Prompt/completion cache residency | [Yes/Partial/No/N/A] | [description] | [severity] |
 | Data retention | [Yes/Partial/No] | [description] | [severity] |
 | Memorization risk | [Yes/Partial/No] | [description] | [severity] |
 | EU AI Act compliance | [Yes/Partial/No/N/A] | [description] | [severity] |
@@ -464,13 +540,17 @@ user input -> prompt assembly -> LLM API -> completion -> output -> logging/stor
 
 1. **Treating the LLM API as a black box for privacy.** When user data is sent to a third-party LLM API, it crosses a trust boundary. The provider's data handling terms, retention policies, and training data practices directly impact your privacy obligations. Review the provider's DPA, data usage policy, and API configuration options (e.g., OpenAI's zero-data-retention option for eligible endpoints, Azure OpenAI's data processing commitments). Failure to configure these options means user data may be retained by the provider and potentially used for model training.
 
-2. **Assuming embeddings are anonymous.** Vector embeddings are not anonymized representations. Research has demonstrated partial inversion of text embeddings to recover source text. Treat embeddings as personal data if the source text contains personal data. Apply the same access controls, retention policies, and deletion mechanisms to embeddings as to the source documents.
+2. **Assuming fallback providers inherit the primary provider's privacy controls.** Model routers often fail open from a contract-bound regional deployment to a default public provider, different project, or different region. A privacy-safe primary path does not make the fallback path safe unless processor terms, training use, retention, residency, logging, and cache behavior are equivalent and enforced in configuration.
 
-3. **Implementing PII redaction only on inputs, not outputs.** Model completions can contain PII from three sources: (a) PII in the current prompt context that the model echoes or reformulates, (b) PII from retrieved RAG documents that bleeds into responses to unrelated queries, and (c) PII memorized from training data that the model reproduces. Output-side PII scanning is required to address all three vectors.
+3. **Treating prompt caches as performance infrastructure instead of regulated data stores.** Prompt, completion, embedding, semantic, observability, and replay caches can hold the same personal data as the live request path. Apply residency, TTL, encryption, tenant isolation, access review, and deletion propagation to caches before counting a provider route as compliant.
 
-4. **Conflating data minimization with data deletion.** Data minimization (collecting only what is necessary) is a design-time principle. Data deletion (removing data when it is no longer needed or when a subject requests erasure) is an operational requirement. Both are needed. Many teams implement minimization at the application layer but fail to propagate deletion to downstream AI data stores (vector databases, training dataset snapshots, model checkpoints, conversation logs, analytics pipelines).
+4. **Assuming embeddings are anonymous.** Vector embeddings are not anonymized representations. Research has demonstrated partial inversion of text embeddings to recover source text. Treat embeddings as personal data if the source text contains personal data. Apply the same access controls, retention policies, and deletion mechanisms to embeddings as to the source documents.
 
-5. **Ignoring model memorization as a privacy risk.** Organizations that use pre-trained or fine-tuned models often do not test for memorization of personal data. A model that has memorized PII from its training corpus is effectively a data store containing personal data -- it can reproduce that data on specific prompts. This has regulatory implications: if the model contains memorized PII of EU residents, GDPR obligations apply to the model weights themselves, not just the training dataset.
+5. **Implementing PII redaction only on inputs, not outputs.** Model completions can contain PII from three sources: (a) PII in the current prompt context that the model echoes or reformulates, (b) PII from retrieved RAG documents that bleeds into responses to unrelated queries, and (c) PII memorized from training data that the model reproduces. Output-side PII scanning is required to address all three vectors.
+
+6. **Conflating data minimization with data deletion.** Data minimization (collecting only what is necessary) is a design-time principle. Data deletion (removing data when it is no longer needed or when a subject requests erasure) is an operational requirement. Both are needed. Many teams implement minimization at the application layer but fail to propagate deletion to downstream AI data stores (vector databases, training dataset snapshots, model checkpoints, conversation logs, analytics pipelines).
+
+7. **Ignoring model memorization as a privacy risk.** Organizations that use pre-trained or fine-tuned models often do not test for memorization of personal data. A model that has memorized PII from its training corpus is effectively a data store containing personal data -- it can reproduce that data on specific prompts. This has regulatory implications: if the model contains memorized PII of EU residents, GDPR obligations apply to the model weights themselves, not just the training dataset.
 
 ---
 
@@ -487,3 +567,7 @@ user input -> prompt assembly -> LLM API -> completion -> output -> logging/stor
 - Microsoft Presidio (PII detection and anonymization) -- https://github.com/microsoft/presidio
 - NIST SP 800-188, De-Identifying Government Datasets -- https://csrc.nist.gov/publications/detail/sp/800-188/final
 - Article 29 Working Party, Guidelines on Data Protection Impact Assessment (WP 248) -- https://ec.europa.eu/newsroom/article29/items/611236
+
+## Changelog
+
+- **v1.0.1** -- Added provider routing, fallback-equivalence, and prompt-cache residency evidence gates; updated the output report with a routing/cache matrix.
