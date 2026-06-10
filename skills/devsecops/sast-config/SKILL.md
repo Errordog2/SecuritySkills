@@ -12,7 +12,7 @@ phase: [build]
 frameworks: [OWASP-ASVS-4.0.3, CWE-Top-25]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -34,6 +34,7 @@ If a target is provided via arguments, focus the review on: $ARGUMENTS
 - Periodic SAST tuning reviews to reduce false positive rates.
 - Custom rule development for organization-specific vulnerability patterns.
 - CI/CD integration review for SAST gate enforcement.
+- CI result integrity review where scanner failures, wrapper jobs, SARIF uploads, or empty result sets may create false assurance.
 - Post-incident rule gap analysis (a vulnerability was missed -- why?).
 - ASVS compliance mapping to verify SAST coverage against verification requirements.
 
@@ -433,6 +434,45 @@ jobs:
 
 **Finding classification:** No SAST in CI pipeline is **Critical**. SAST runs but is not a required status check is **High**. No scheduled full-repo scan is **Medium**. SAST action unpinned is **Medium**.
 
+#### 6.2 Scanner Failure and SARIF Integrity Gates
+
+A green CI job, uploaded SARIF file, or empty code-scanning dashboard is not proof that SAST ran successfully for the current commit. Review the scanner outcome separately from wrapper, upload, and reporting steps.
+
+**What to verify:**
+
+- Scanner commands fail closed: no `continue-on-error: true`, `|| true`, broad `if: always()` wrapper, or script that swallows non-zero scanner exits for blocking checks.
+- The required branch-protection check is the scanner outcome or a gate that explicitly validates scanner success, not only `upload-sarif`, a dashboard ingestion step, or a wrapper job.
+- SARIF was generated during the current workflow run for the current commit SHA/ref and not reused from cache, a fallback file, or a previous run.
+- SARIF `runs[].tool.driver.name`, tool version, invocation status, analyzed files, and result count are recorded.
+- Empty SARIF or zero findings are classified as `Successful zero findings` only when the scanner completed and analyzed the expected scope.
+- Partial analysis, language extraction errors, auth/config failures, skipped jobs, missing rules, timeout exits, and empty/fallback SARIF are findings even when upload succeeds.
+
+**Evidence table:**
+
+| Field | Purpose |
+|---|---|
+| **Scanner Exit Handling** | Shows whether Semgrep/CodeQL/Sonar/etc. non-zero exits fail the blocking check. |
+| **Required Check Binding** | Confirms branch protection requires scanner success, not only SARIF upload or a reporting wrapper. |
+| **Current Commit Binding** | Records the commit SHA/ref, workflow run ID, and SARIF generation timestamp. |
+| **SARIF Freshness** | Distinguishes current-run SARIF from cached, fallback, stale, or partial output. |
+| **Empty Result Semantics** | Distinguishes successful zero findings from skipped, failed, or partial analysis. |
+| **Tool Run Metadata** | Captures tool name, version, rule set, analyzed languages/files, and invocation status. |
+| **Failure Mode** | Records parse, extraction, auth, config, timeout, or engine failures and their CI impact. |
+
+**Finding triggers:**
+
+```
+SAST-CI-FAIL-01: Scanner step uses continue-on-error, || true, or wrapper logic that hides non-zero scanner exits
+SAST-CI-FAIL-02: Required status check is SARIF upload or dashboard ingestion instead of scanner success
+SAST-CI-FAIL-03: SARIF is uploaded with if: always() without a preceding scanner-success gate
+SAST-CI-FAIL-04: SARIF file is empty, stale, cached, fallback, partial, or not bound to the current commit/run
+SAST-CI-FAIL-05: Zero findings are reported without evidence that the expected languages/files/rules were analyzed
+SAST-CI-FAIL-06: CodeQL database creation, language extraction, Semgrep config/auth, or scanner engine failures are summarized as clean results
+SAST-CI-FAIL-07: Monitor-only rollout is documented as a blocking SAST gate
+```
+
+**Classification guidance:** Hidden scanner failures and stale/empty SARIF accepted as clean results are **High** because they create false assurance in a required security gate. Treat monitor-only SAST presented as blocking as **High**. Treat missing current-run SARIF metadata or unclear empty-result semantics as **Medium** unless branch protection relies on it, then **High**.
+
 ---
 
 ## Findings Classification
@@ -474,6 +514,16 @@ jobs:
 | Required status check | Yes/No | <branch protection config> |
 | Scheduled full scan | Yes/No | <cron schedule> |
 | Results dashboard | Yes/No | <dashboard URL or tool> |
+
+### Scanner Failure and SARIF Integrity
+
+| Check | Status | Evidence |
+|-------|--------|---------|
+| Scanner exits fail closed | Pass/Fail/Not Evaluable | <scanner step, shell flags, wrapper script> |
+| Required check binds to scanner success | Pass/Fail/Not Evaluable | <branch protection or required check evidence> |
+| SARIF generated for current commit/run | Pass/Fail/Not Evaluable | <commit SHA, run ID, SARIF timestamp> |
+| Empty result means successful zero findings | Pass/Fail/Not Evaluable | <tool metadata, analyzed files/languages, result count> |
+| Partial/skipped analysis is not treated as clean | Pass/Fail/Not Evaluable | <tool invocation status and failure mode> |
 
 ### Findings
 
@@ -536,6 +586,10 @@ jobs:
 
 5. **Ignoring SAST scan performance.** If SAST takes 30 minutes on a PR check, developers will find ways to bypass it. Target under 10 minutes for PR scans. Use diff-aware scanning for PRs and reserve full analysis for scheduled scans.
 
+6. **Treating SARIF upload as scanner success.** SARIF ingestion can succeed even when analysis failed, was skipped, produced stale output, or generated an empty fallback file. Required checks must prove scanner completion for the current commit.
+
+7. **Accepting zero findings without run metadata.** A clean dashboard is meaningful only when the tool version, rules, analyzed scope, commit SHA, and invocation status prove a successful current run.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -564,4 +618,5 @@ This skill processes SAST configuration files, custom rules, and code patterns t
 
 ## Changelog
 
+- **1.0.1** -- Added scanner failure and SARIF integrity gates for fail-closed CI checks, current-commit binding, empty-result semantics, stale/partial SARIF detection, and required-check binding.
 - **1.0.0** -- Initial release. Full coverage of SAST configuration review against OWASP ASVS 4.0.3 and CWE Top 25, with Semgrep and CodeQL patterns.
