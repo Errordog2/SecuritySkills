@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16, Sigma, Palantir-ADS]
 difficulty: advanced
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -195,6 +195,31 @@ fields:
 | `|base64offset` | Base64 encoded value match | `CommandLine|base64offset|contains: 'IEX'` |
 | `condition` | Boolean logic | `selection_a and selection_b and not filter_main` |
 
+### Step 3a: Fixture-Backed Backend Validation
+
+Validate the Sigma rule against replayable fixtures before marking coverage as Tested or Operational. A rule that has only been authored in Sigma, converted once, or exercised with a single Atomic Red Team command remains Theoretical until backend-specific query behavior is proven.
+
+**Required validation artifacts:**
+
+| Artifact | Requirement |
+|----------|-------------|
+| True-positive fixtures | At least one known-bad event fixture that should match the detection logic, with fixture ID and expected alert count |
+| Benign fixtures | At least one known-good or known-benign event fixture that should not match, including expected non-match count |
+| Backend conversion output | Saved KQL, SPL, EQL, Lucene, Chronicle, QRadar, or other target backend query generated from the Sigma rule |
+| Backend parity review | Explicit review of Sigma modifiers, field mappings, escaping, case sensitivity, regex behavior, and unsupported backend features |
+| Replay result | Actual match count compared to the expected match count for each target backend |
+| Regression hook | Detection-as-code CI step that replays fixtures whenever the Sigma rule, backend config, or field mapping changes |
+
+**Backend parity checks:**
+
+- Confirm `contains|all`, `startswith`, `endswith`, `re`, `cidr`, `base64offset`, and list conditions survive conversion with the same semantics.
+- Confirm target backend field names map to the telemetry schema used by the fixture set.
+- Confirm escaped paths, backslashes, quotes, wildcards, case sensitivity, and regex anchors behave as intended after conversion.
+- Confirm filters suppress the benign fixtures without suppressing true-positive fixtures.
+- Record unsupported Sigma features and compensating query edits before deployment.
+
+**Promotion rule:** Sigma-authored-only, syntax-linted-only, converted-only, or Atomic-only coverage is Theoretical. Tested coverage requires replayed true-positive and benign fixtures with expected counts against the converted target backend query. Operational coverage requires the same fixture evidence plus production deployment and monitoring.
+
 ### Step 4: Build ADS Documentation
 
 Document the detection using the Palantir Alerting and Detection Strategy (ADS) framework. ADS ensures every detection has operational context beyond the rule itself.
@@ -278,9 +303,9 @@ Map detection coverage against the ATT&CK matrix to identify gaps.
 | Level | Color | Definition |
 |-------|-------|------------|
 | **None** | White | No detection rule exists for this technique |
-| **Theoretical** | Light Yellow | A rule exists but has not been validated or tested |
-| **Tested** | Light Green | Rule has been validated with synthetic test data (e.g., Atomic Red Team) |
-| **Operational** | Green | Rule is deployed in production, has been tuned, and has generated actionable alerts |
+| **Theoretical** | Light Yellow | Sigma rule exists, or has been converted, but has not been replayed against backend-specific TP and benign fixtures |
+| **Tested** | Light Green | Converted target-backend query has been replayed against TP and benign fixtures with expected alert and non-match counts |
+| **Operational** | Green | Tested rule is deployed in production, monitored for performance, and tuned with documented evidence |
 | **Robust** | Dark Green | Multiple complementary rules cover different procedure examples; rule has caught real-world activity |
 
 **Heatmap construction process:**
@@ -339,9 +364,9 @@ detections/
 **CI/CD pipeline stages:**
 
 1. **Lint:** Validate Sigma YAML syntax and required fields
-2. **Test:** Run Sigma rule against known-good and known-bad sample logs
-3. **Convert:** Use `sigma-cli` to convert Sigma to target SIEM query language
-4. **Review:** Require peer review (pull request) before merge
+2. **Convert:** Use `sigma-cli` to convert Sigma to target SIEM query language
+3. **Test:** Replay TP and benign fixtures against the converted target-backend query and compare actual counts to expected counts
+4. **Review:** Require peer review (pull request), including backend parity checks for field mappings, modifiers, escaping, and unsupported features
 5. **Deploy:** Push converted rules to SIEM via API (Sentinel Analytics Rules API, Splunk REST API)
 6. **Monitor:** Track rule performance metrics (fire rate, TP rate, MTTD)
 
@@ -365,7 +390,7 @@ Produce detection engineering deliverables in this structure:
 ```markdown
 ## Detection Engineering Report: [ATT&CK Technique ID]
 **Date:** [YYYY-MM-DD]
-**Skill:** detection-engineering v1.0.0
+**Skill:** detection-engineering v1.0.1
 **Frameworks:** MITRE ATT&CK v16, Sigma, Palantir ADS
 
 ### ATT&CK Technique Summary
@@ -388,6 +413,11 @@ Produce detection engineering deliverables in this structure:
 | Current Coverage | [None / Theoretical / Tested / Operational / Robust] |
 | Target Coverage | [Operational / Robust] |
 | Validation Method | [Atomic Red Team test ID / manual test procedure] |
+
+### Backend Fixture Validation
+| Backend | Converted Query Artifact | TP Fixtures | Benign Fixtures | Expected Matches | Actual Matches | Regression Status | Notes |
+|---------|--------------------------|-------------|-----------------|------------------|----------------|-------------------|-------|
+| [Sentinel / Splunk / Elastic / Chronicle / QRadar] | [Path or PR artifact] | [Fixture IDs] | [Fixture IDs] | [Count] | [Count] | [Pass / Fail / Not run] | [Backend parity notes] |
 
 ### Deployment Notes
 - **Target SIEM:** [Platform]
@@ -486,11 +516,15 @@ Deploying a detection rule without enumerating and testing against known false p
 
 A detection rule that has never been tested against a known-true-positive event provides only theoretical coverage. Use Atomic Red Team (https://github.com/redcanaryco/atomic-red-team), Caldera, or manual technique execution in a test environment to confirm the rule fires on the expected activity. Move rules from "experimental" to "stable" status only after successful validation.
 
-### Pitfall 4: Ignoring Detection Rule Lifecycle Management
+### Pitfall 4: Promoting Sigma Rules Without Backend Fixture Replay
+
+Sigma syntax validity does not prove that the converted SIEM query behaves correctly. Backend converters can change semantics through field mapping gaps, modifier support differences, regex handling, escaping, wildcard behavior, or case sensitivity. Do not mark coverage as Tested until the converted backend query has been replayed against known-bad and benign fixtures with documented expected and actual counts.
+
+### Pitfall 5: Ignoring Detection Rule Lifecycle Management
 
 Detection rules are not write-once artifacts. Log sources change, environments evolve, adversary techniques mutate, and SIEM platforms update their query syntax. Rules that are not periodically reviewed become stale, accumulate false positives, or silently stop working. Implement a review cadence (quarterly minimum) and track rule health metrics (fire count, TP/FP ratio, last triggered date).
 
-### Pitfall 5: Mapping Detections to ATT&CK Techniques Incorrectly
+### Pitfall 6: Mapping Detections to ATT&CK Techniques Incorrectly
 
 Overly broad or incorrect ATT&CK mappings undermine coverage analysis. A rule that detects a specific PowerShell obfuscation technique should map to T1059.001 (PowerShell) and potentially T1027 (Obfuscated Files or Information), not to the parent T1059 alone. Use sub-technique IDs when the detection is specific to a sub-technique. Validate mappings against the ATT&CK technique definition and procedure examples.
 
@@ -508,7 +542,14 @@ This skill processes user-supplied content that may include log samples, detecti
 
 ---
 
-## 9. References
+## 9. Changelog
+
+- **v1.0.1:** Added fixture-backed backend validation gates for Sigma rules, updated coverage level definitions, expanded CI/CD review requirements, and added output fields for backend replay evidence.
+- **v1.0.0:** Initial detection engineering workflow for Sigma, ADS documentation, and ATT&CK coverage mapping.
+
+---
+
+## 10. References
 
 1. **MITRE ATT&CK Enterprise Matrix v16** -- https://attack.mitre.org/matrices/enterprise/
 2. **MITRE ATT&CK Techniques** -- https://attack.mitre.org/techniques/enterprise/
