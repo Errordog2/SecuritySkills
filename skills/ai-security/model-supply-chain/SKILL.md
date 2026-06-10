@@ -14,7 +14,7 @@ phase: [build, review, operate]
 frameworks: [OWASP-LLM03-2025, SLSA-v1.0, MITRE-ATLAS]
 difficulty: advanced
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -82,6 +82,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Model signing or attestation | CI/CD configs, SLSA provenance files, Sigstore artifacts | Confirms cryptographic supply chain verification |
 | Access controls on model storage | Cloud storage IAM, artifact registry permissions | Determines who can replace or modify model weights |
 | Adapter/plugin sources | LoRA configs, adapter download code | Third-party adapters inherit the same supply chain risks |
+| Tokenizer, config, and chat template assets | `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`, `config.json`, model card, serving config | These assets can change prompt formatting, role separation, stop tokens, and runtime behavior independently of weights |
 
 ---
 
@@ -130,6 +131,41 @@ Glob: **/config.json
 | Model pulled from unverified third-party source (not the original publisher) | High |
 | No model card or provenance documentation available | Medium |
 | Checksums verified but against values stored in the same repository as the model (self-referential) | Medium |
+
+---
+
+### Step 1a -- Tokenizer and Chat Template Provenance
+
+Treat tokenizer, configuration, and chat-template files as supply-chain inputs to model behavior, not as harmless metadata. A model can have verified weights while an unpinned tokenizer or mutable chat template changes role formatting, special-token handling, stop sequences, tool-call parsing, or safety boundaries.
+
+**What to look for in code and configuration:**
+
+- `AutoTokenizer.from_pretrained(...)`, `apply_chat_template(...)`, runtime prompt builders, or serving configs that fetch tokenizer/template assets from mutable branches such as `main`.
+- LoRA, QLoRA, PEFT, quantized, or converted deployments that combine weights/adapters with a tokenizer from a different base model or revision.
+- Missing digest evidence for `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`, `config.json`, chat template definitions, generation config, and stop-token configuration.
+- Runtime-specific prompt templates in vLLM, TGI, llama.cpp, Ollama, Triton, or custom serving code that differ from the model card or training template.
+- Safety evaluations run on base weights only, rather than the final deployed composition of weights, adapter, tokenizer, chat template, generation config, and runtime.
+
+**Required evidence gates:**
+
+| Evidence | Requirement |
+|----------|-------------|
+| Pinned asset revisions | Weights, adapters, tokenizer files, config files, chat templates, and serving runtime all reference immutable revisions or artifact versions |
+| Digest manifest | SHA256 or signed digest is recorded for tokenizer/config/template assets alongside weight digests |
+| Special-token diff review | System, user, assistant, tool, BOS/EOS, padding, unknown, and stop tokens are compared against the expected base model |
+| Prompt roundtrip tests | Representative messages serialize and parse back with the expected role order, separators, and stop behavior |
+| Runtime parity check | Final serving runtime applies the same chat template and stop sequences used in validation |
+| Final-composition safety eval | Safety and regression evaluations run on the deployed composition, not only on base weights |
+
+**What constitutes a finding:**
+
+| Condition | Severity |
+|---|---|
+| Tokenizer or chat template fetched from a mutable branch in production | High |
+| Tokenizer/config/template digest missing while weights are pinned | High |
+| Adapter deployed with an unrelated or undocumented tokenizer | High |
+| Special-token or stop-sequence drift with no compatibility test | Medium |
+| Safety evals do not cover final weights + adapter + tokenizer + template + runtime composition | Medium |
 
 ---
 
@@ -378,9 +414,9 @@ Assess whether architectural and procedural controls exist to detect model backd
 
 ## Model Inventory
 
-| Model | Source | Format | Checksum Verified | Pinned Version | Model Card |
-|---|---|---|---|---|---|
-| [name] | [source] | [format] | [Yes/No] | [Yes/No] | [Complete/Partial/Missing] |
+| Model | Source | Format | Weight Digest | Tokenizer Digest | Chat Template Digest | Pinned Version | Model Card |
+|---|---|---|---|---|---|---|---|
+| [name] | [source] | [format] | [sha256/signature] | [sha256/signature] | [sha256/signature] | [Yes/No] | [Complete/Partial/Missing] |
 
 ## Findings
 
@@ -406,6 +442,12 @@ Assess whether architectural and procedural controls exist to detect model backd
 | Inference dependencies | [description] | [recommendation] | [severity] |
 | Model documentation | [description] | [recommendation] | [severity] |
 | Backdoor detection | [description] | [recommendation] | [severity] |
+
+## Tokenizer and Chat Template Evidence
+
+| Model Composition | Tokenizer Revision | Chat Template Revision | Special-Token Diff | Prompt Roundtrip | Stop Sequence Validation | Final Safety Eval | Status |
+|---|---|---|---|---|---|---|---|
+| [weights + adapter + runtime] | [pinned revision/digest] | [pinned revision/digest] | [reviewed/not reviewed] | [pass/fail] | [pass/fail] | [pass/fail] | [Pass/Fail] |
 
 ## Recommendations
 [Prioritized list of remediation actions]
@@ -439,7 +481,16 @@ Assess whether architectural and procedural controls exist to detect model backd
 
 4. **Assuming Hugging Face models are vetted.** Hugging Face Hub is a hosting platform, not a curation service. Any user can upload any model. While Hugging Face has introduced malware scanning and model signing capabilities, the majority of hosted models have no cryptographic provenance. Treat Hugging Face models as untrusted artifacts requiring verification, the same way you treat npm packages.
 
-5. **Evaluating models only on benchmarks.** Standard benchmarks measure general capability, not supply chain integrity. A backdoored model will perform normally on benchmarks by design. Behavioral differential testing with curated, domain-specific test sets that probe for targeted manipulation is required to surface backdoors.
+5. **Ignoring tokenizer and chat-template drift.** Verified model weights do not prove the deployed prompt semantics are safe. Mutable tokenizer files, changed special tokens, mismatched adapter tokenizers, runtime-specific templates, or altered stop sequences can change role boundaries and safety behavior without modifying weight files.
+
+6. **Evaluating models only on benchmarks.** Standard benchmarks measure general capability, not supply chain integrity. A backdoored model will perform normally on benchmarks by design. Behavioral differential testing with curated, domain-specific test sets that probe for targeted manipulation is required to surface backdoors.
+
+---
+
+## Changelog
+
+- **v1.0.1:** Added tokenizer and chat-template provenance gates, digest requirements, compatibility tests, final-composition safety evaluation, output evidence table, and common pitfall coverage.
+- **v1.0.0:** Initial model supply-chain workflow for model provenance, training data lineage, fine-tuning integrity, inference dependencies, model cards, and backdoor detection.
 
 ---
 
