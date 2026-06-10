@@ -12,7 +12,7 @@ phase: [build]
 frameworks: [OWASP-ASVS-4.0.3, CWE-Top-25]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -368,9 +368,91 @@ value = request.args.get("id")  # nosemgrep: python.django.security.injection.sq
 
 ---
 
-### Step 6: CI Integration Review
+### Step 6: Baseline and Suppression Lifecycle Review
 
-#### 6.1 CI Pipeline Integration Patterns
+Temporary baselines can be useful during SAST rollout, but they become blind spots when they hide new findings, have no owner, never expire, or cannot preserve alert identity across scans. Review baselines and suppressions as lifecycle-managed exceptions, not as one-time tuning artifacts.
+
+#### 6.1 Controlled Temporary Baseline
+
+```yaml
+sast_rollout:
+  tool: codeql
+  baseline:
+    created_at: "2026-06-01"
+    scope: legacy_findings_only
+    owner: appsec-team
+    expiry: "2026-09-01"
+    retirement_plan: "burn down all high findings before expiry"
+  pull_request_gate:
+    blocks_new_critical_high_findings: true
+    required_status_check: codeql
+  scheduled_full_scan:
+    cadence: weekly
+    sarif_partial_fingerprints: present
+suppression_register:
+  - rule: js/xss
+    location: src/views/profile.js
+    reason: false_positive
+    owner: appsec-team
+    ticket: SEC-1234
+    expires: "2026-07-15"
+    last_reviewed: "2026-06-01"
+    evidence: "validated by output encoder"
+```
+
+Do not flag a baseline solely because it exists. Flag it when it suppresses new findings, lacks owner/expiry/retirement evidence, hides branch protection failures, or cannot preserve stable alert identity.
+
+#### 6.2 Unsafe Baseline and Suppression Patterns
+
+```yaml
+sast:
+  baseline_file: sast-baseline.json
+  fail_on_new_findings: false
+  expiry: none
+  owner: none
+```
+
+```python
+# VULNERABLE: Suppression has no rule id, owner, reason, ticket, or expiry
+# nosemgrep
+eval(user_input)
+```
+
+```json
+{
+  "runs": [{
+    "results": [{
+      "ruleId": "custom.xss",
+      "locations": [{
+        "physicalLocation": {
+          "artifactLocation": {"uri": "src/app.js"}
+        }
+      }]
+    }]
+  }]
+}
+```
+
+The SARIF example lacks stable result identity evidence such as `partialFingerprints`. Missing fingerprints can create duplicate alerts or lose alert continuity, which makes baseline and suppression decisions unreliable.
+
+#### 6.3 Lifecycle Evidence Checklist
+
+- [ ] Baseline scope is limited to legacy findings; new Critical/High findings still block or require explicit review.
+- [ ] Baseline has owner, creation date, expiry date, retirement plan, and burn-down metric.
+- [ ] Required status checks prove PRs fail on new in-scope findings.
+- [ ] Scheduled full scans reconcile PR-only or diff-only scan gaps.
+- [ ] SARIF uploads preserve stable result identity (`partialFingerprints` or tool-equivalent alert identity).
+- [ ] Suppressions include rule id, location/scope, reason category, owner, ticket/reference, expiry, last reviewed date, evidence link, and revalidation trigger.
+- [ ] Inline suppressions (`nosemgrep`, CodeQL filters, ignore files) are mirrored in a suppression register.
+- [ ] Suppression expiry and baseline expiry are monitored; expired entries reopen or fail the review.
+
+**Finding classification:** Baseline that allows new Critical/High findings indefinitely is **High**. Suppressions without owner/reason/expiry are **High**. Missing SARIF or alert identity evidence is **Medium**. No scheduled full-scan reconciliation for PR-only scanning is **Medium**.
+
+---
+
+### Step 7: CI Integration Review
+
+#### 7.1 CI Pipeline Integration Patterns
 
 **GitHub Actions -- Semgrep:**
 
@@ -440,8 +522,8 @@ jobs:
 | Severity | Definition |
 |----------|-----------|
 | **Critical** | No SAST tooling deployed; CWE Top 5 weaknesses with zero rule coverage for languages in active use. |
-| **High** | SAST not a required CI check; CWE Top 10 coverage gap; suppressions without justification; no triage workflow; custom rules with incorrect severity mapping. |
-| **Medium** | CWE 11-25 coverage gap; no false positive management process; no scheduled full-repo scan; no remediation SLA; excessive path exclusions; FP rate > 30%. |
+| **High** | SAST not a required CI check; CWE Top 10 coverage gap; suppressions without justification, owner, or expiry; indefinite baseline that allows new Critical/High findings; no triage workflow; custom rules with incorrect severity mapping. |
+| **Medium** | CWE 11-25 coverage gap; no false positive management process; missing SARIF/alert identity evidence; no scheduled full-repo scan; no remediation SLA; excessive path exclusions; FP rate > 30%. |
 | **Low** | Rule naming convention inconsistencies; missing metadata on custom rules; suboptimal scan performance; cosmetic configuration issues. |
 
 ---
@@ -474,6 +556,18 @@ jobs:
 | Required status check | Yes/No | <branch protection config> |
 | Scheduled full scan | Yes/No | <cron schedule> |
 | Results dashboard | Yes/No | <dashboard URL or tool> |
+
+### Baseline and Suppression Lifecycle
+
+| Artifact | Scope | Owner | Expiry | Blocks New Findings | SARIF / Alert Identity | Last Review | Status |
+|----------|-------|-------|--------|---------------------|------------------------|-------------|--------|
+| <baseline or suppression file> | legacy/new/all | <team> | <date/none> | Yes/No | partialFingerprints/tool-specific/unknown | <date> | Pass/Finding |
+
+### Suppression Register
+
+| Rule ID | Location | Reason Category | Owner | Ticket | Expires | Last Reviewed | Revalidation Trigger |
+|---------|----------|-----------------|-------|--------|---------|---------------|----------------------|
+| <rule> | <file/line/config> | false-positive/accepted-risk/test-only | <owner> | <ticket> | <date> | <date> | rule update/code change/expiry |
 
 ### Findings
 
@@ -536,6 +630,12 @@ jobs:
 
 5. **Ignoring SAST scan performance.** If SAST takes 30 minutes on a PR check, developers will find ways to bypass it. Target under 10 minutes for PR scans. Use diff-aware scanning for PRs and reserve full analysis for scheduled scans.
 
+6. **Using a baseline as a permanent exception list.** Baselines should be temporary rollout tools with an owner, expiry, and retirement plan. They should not suppress new Critical/High findings or reset the SLA clock for legacy findings.
+
+7. **Leaving suppressions only inline.** Inline `nosemgrep`, ignore files, and CodeQL query filters should be mirrored in a suppression register. Otherwise ownership, reason, expiry, and last-reviewed evidence are lost.
+
+8. **Trusting code scanning alerts without identity evidence.** If SARIF uploads do not preserve stable fingerprints or tool-specific alert identity, reviewers cannot reliably know whether findings are new, fixed, duplicated, or hidden by a baseline.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -564,4 +664,5 @@ This skill processes SAST configuration files, custom rules, and code patterns t
 
 ## Changelog
 
+- **1.0.1** -- Added baseline and suppression lifecycle gates for temporary baseline scope, new-finding enforcement, owner/expiry/retirement evidence, SARIF alert identity, suppression registers, and scheduled full-scan reconciliation.
 - **1.0.0** -- Initial release. Full coverage of SAST configuration review against OWASP ASVS 4.0.3 and CWE Top 25, with Semgrep and CodeQL patterns.
