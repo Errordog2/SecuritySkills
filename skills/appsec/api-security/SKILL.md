@@ -4,14 +4,16 @@ description: >
   Reviews REST and GraphQL APIs against the OWASP API Security Top 10:2023.
   Auto-invoked when reviewing OpenAPI/Swagger specs, API endpoint code, or
   GraphQL schemas. Covers BOLA, BFLA, authentication, rate limiting, and
-  SSRF. Produces findings mapped to API1-API10 with remediation guidance.
+  SSRF, including media-type parser confusion and alternate response
+  representation checks. Produces findings mapped to API1-API10 with
+  remediation guidance.
 tags: [appsec, api, rest, graphql]
 role: [appsec-engineer, security-engineer]
 phase: [design, build, review]
 frameworks: [OWASP-API-Security-2023, OWASP-ASVS]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -38,12 +40,50 @@ Before analyzing any endpoint, establish a complete inventory of the API surface
 5. **Catalog data objects** -- List the resources/entities exposed by the API and their sensitivity classification (PII, financial, internal, public).
 6. **Note rate limiting and quota configurations** -- Document any existing throttling, quota, or cost-control mechanisms at the gateway or application layer.
 7. **Identify downstream dependencies** -- Third-party APIs, internal microservices, or webhooks that the API consumes.
+8. **Catalog request and response representations** -- For every operation, record accepted `Content-Type` values, `Accept` formats, charset handling, multipart metadata fields, raw-body parser paths, vendor media types, and export formats.
 
 > **Gate:** Do not proceed until the API style, authentication model, authorization model, and endpoint inventory are documented. Incomplete scope leads to missed findings.
 
 ---
 
-## Steps 2-11: OWASP API Security Top 10:2023 Evaluation (API1-API10)
+## Step 2: Media-Type, Parser, and Representation Equivalence Gate
+
+Before relying on a JSON schema, OpenAPI contract, middleware stack, or endpoint-level authorization result, prove that every accepted request parser and response representation enforces equivalent controls. A JSON-only happy path is not enough when the runtime also accepts `text/plain`, `application/x-www-form-urlencoded`, multipart metadata, XML, raw webhook bodies, GraphQL multipart uploads, vendor media types, charset variants, or export-oriented `Accept` formats.
+
+Reviewers must collect this evidence for endpoints that create, update, authorize, upload, export, or return sensitive objects:
+
+1. **Request media-type allowlist** -- Document the exact accepted `Content-Type` values and where unsupported values are rejected with a consistent 4xx response before business logic runs.
+2. **Parser ordering and routing** -- Identify body parsers, raw-body handlers, file-upload middleware, API gateways, framework fallbacks, and controller bindings. Confirm which validation and authorization code runs after each parser path.
+3. **Schema and property-authorization equivalence** -- Verify that JSON, form, multipart metadata, XML, vendor media, and raw-body paths apply equivalent schema validation, mass-assignment controls, object ownership checks, and sensitive-property filtering.
+4. **Multipart and upload metadata controls** -- Treat file metadata, sidecar JSON fields, filenames, MIME sniffing results, and GraphQL upload variables as structured input that requires the same validation and authorization as the documented JSON body.
+5. **Webhook and signature raw-body handling** -- Raw-body parsing is acceptable for signature verification only when schema validation, replay protection, actor authorization, and downstream trust boundaries still run after the signature check.
+6. **Response negotiation and exports** -- Compare JSON, CSV, XML, HTML, PDF, streaming, and vendor-specific responses for field-level filtering, error detail, pagination limits, authorization checks, and cache headers.
+7. **Negative and parity tests** -- Require tests or reproducible evidence for rejected media types, charset variants, malformed multipart boundaries, alternate `Accept` formats, and parser fallbacks.
+8. **Spec-to-runtime drift** -- Compare OpenAPI/Swagger declared media types and response schemas against route code, gateway config, generated clients, and framework defaults.
+
+### Media-Type and Parser Finding Triggers
+
+Create a finding when any of the following conditions affect security-sensitive input, output, or authorization decisions:
+
+- **API-PARSER-01:** An endpoint documented as JSON also accepts `text/plain`, form, XML, multipart metadata, or vendor media types that bypass schema validation, mass-assignment defenses, or object/property authorization.
+- **API-PARSER-02:** Upload or multipart metadata is parsed by a different code path than the JSON API body and lacks equivalent ownership, file-type, filename, metadata, or business-rule validation.
+- **API-PARSER-03:** Raw webhook or gateway body handling verifies a signature but skips replay controls, schema validation, actor mapping, or downstream trust-boundary checks.
+- **API-PARSER-04:** Alternate `Accept` formats, exports, or streaming representations expose fields, debug details, hidden object properties, or larger datasets than the primary JSON response.
+- **API-PARSER-05:** OpenAPI, gateway, or generated-client media types do not match runtime parser behavior, making documented controls incomplete or misleading.
+- **API-PARSER-06:** Unsupported media types are silently coerced, parsed as generic strings, forwarded to downstream services, or accepted with best-effort framework defaults instead of failing closed.
+
+### False-Positive Guardrails
+
+- Explicitly supported vendor media types, charset variants, or versioned representations are acceptable when the review proves validation, authorization, error handling, and response filtering are equivalent.
+- Webhooks may require raw-body access for signatures, but the raw body must become validated structured data before it drives business state.
+- Multipart or GraphQL upload flows are not automatically vulnerable; report them only when metadata, authorization, CSRF, file-content, size, or ownership controls differ from the documented API path.
+- If parser behavior cannot be proven from source, configuration, tests, or runtime evidence, mark the endpoint `Not Evaluable` instead of assuming the documented JSON path covers every accepted representation.
+
+> **Gate:** Do not mark an endpoint as passing API3/API8/API9/API10 checks until request parser paths and response representations are either explicitly rejected or proven equivalent to the documented secure path.
+
+---
+
+## Steps 3-12: OWASP API Security Top 10:2023 Evaluation (API1-API10)
 
 Evaluate the API against all ten OWASP API Security Top 10:2023 risk categories: Broken Object Level Authorization (BOLA), Broken Authentication, Broken Object Property Level Authorization, Unrestricted Resource Consumption, Broken Function Level Authorization (BFLA), Unrestricted Access to Sensitive Business Flows, Server Side Request Forgery (SSRF), Security Misconfiguration, Improper Inventory Management, and Unsafe Consumption of APIs.
 
@@ -66,6 +106,7 @@ Each finding produced by this review must include the following fields:
 | **Location** | File path and line number(s), or OpenAPI spec path |
 | **Description** | What the vulnerability is and why it matters |
 | **Evidence** | Relevant code snippet or spec excerpt demonstrating the issue |
+| **Parser/Representation Evidence** | Accepted request media types, parser path, `Accept` format, and validation/authorization parity evidence when relevant |
 | **Remediation** | Specific fix with code example where possible |
 | **Status** | Open, Mitigated, Accepted Risk, False Positive |
 
@@ -92,7 +133,7 @@ The final review output must be structured as follows:
 **API Style:** [REST / GraphQL / gRPC / Hybrid]
 **Specification:** [OpenAPI spec path, if applicable]
 **Date:** [review date]
-**Reviewer:** AI Agent -- api-security skill v1.0.0
+**Reviewer:** AI Agent -- api-security skill v1.0.1
 
 ### Summary
 
@@ -112,6 +153,12 @@ The final review output must be structured as follows:
 **Total Findings:** [count]
 **Critical:** [count] | **High:** [count] | **Medium:** [count] | **Low:** [count] | **Info:** [count]
 
+### Media-Type and Representation Evidence
+
+| Endpoint | Documented media types | Runtime parser paths | Alternate response formats | Rejected media evidence | Gaps |
+|---|---|---|---|---|---|
+| [method path] | [Content-Type / Accept from spec] | [JSON/form/multipart/raw/XML/vendor] | [JSON/CSV/XML/HTML/export/stream] | [tests/logs/config] | [none or issue ID] |
+
 ### Findings
 
 #### API-SEC-001: [Title]
@@ -125,6 +172,7 @@ The final review output must be structured as follows:
   ```[language]
   [code snippet]
   ```
+- **Parser/Representation Evidence:** [accepted media types, parser path, response format, and parity evidence when relevant]
 - **Remediation:** [specific fix with code example]
 - **Status:** Open
 
@@ -214,6 +262,19 @@ Unlike REST, where authorization can be enforced per endpoint, GraphQL requires 
 5. **Applying rate limiting only to authentication endpoints.** Every API endpoint requires rate limiting proportional to its cost and sensitivity. Data-heavy endpoints, search functions, and export operations are frequent targets for abuse even when properly authenticated.
 
 6. **Ignoring upstream API trust.** Data received from third-party APIs and even internal microservices must be validated before use. A compromised upstream service can inject SQL, XSS, or SSRF payloads through otherwise trusted data channels.
+
+7. **Assuming JSON validation covers every parser path.** Frameworks may accept form bodies, `text/plain`, multipart metadata, XML, raw webhook bodies, or vendor media types even when the OpenAPI spec documents only JSON. Verify rejected media types and parser parity instead of trusting the happy path.
+
+8. **Ignoring alternate response representations.** CSV, XML, HTML, PDF, streaming, and export endpoints can bypass field-level filtering or pagination limits even when the JSON response is correct.
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0.1 | 2026-06-11 | Added media-type parser confusion, raw-body, multipart metadata, response-negotiation, and spec-to-runtime parity evidence gates. |
+| 1.0.0 | Initial | Initial API Security Top 10:2023 review workflow. |
 
 ---
 
