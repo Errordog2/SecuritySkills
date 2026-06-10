@@ -13,7 +13,7 @@ phase: [operate, respond]
 frameworks: [MITRE-ATT&CK-v16, NIST-SP-800-61-Rev2]
 difficulty: beginner
 time_estimate: "10-20min per alert"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -57,6 +57,7 @@ Before beginning triage, gather or confirm:
 - [ ] **User context:** Who is the associated user? (Role, department, normal working hours, recent activity patterns.)
 - [ ] **Historical context:** Has this alert fired before? What was the previous disposition? Has this user or host generated related alerts recently?
 - [ ] **Threat intelligence:** Do any indicators in the alert (IPs, domains, hashes) appear in threat intelligence feeds?
+- [ ] **Enrichment provenance:** Which asset, identity, GeoIP, ASN, cloud-provider, VPN/proxy, threat-intel, and historical-disposition enrichments were used, when were they looked up, and do they apply to the alert time?
 
 If some context is unavailable, proceed with available information and note gaps as assumptions.
 
@@ -81,6 +82,44 @@ Gather all data associated with the alert. Do not make a disposition decision un
 | **Previous alerts** | Historical alerts for same user, host, or IOC | SIEM, case management |
 
 **NIST SP 800-61 alignment:** This phase corresponds to Section 3.2 "Detection and Analysis" -- specifically the initial analysis and validation of the alert before classification.
+
+#### Enrichment Freshness and Provenance Gate
+
+Before enrichments change priority or disposition, prove they are fresh, sourced, and applicable to the alert time. Current CMDB values, copied threat-intel notes, provider tags, GeoIP/ASN labels, and previous benign dispositions can drift after the alert occurred.
+
+Do not close or downgrade an alert solely because an enrichment is missing, stale, or says `cloud provider`, `VPN`, `scanner`, `CDN`, or `known benign`. Missing context should lower confidence, be marked `Not Evaluable`, and keep investigation open when other evidence warrants it.
+
+| Enrichment Type | Required Provenance | Freshness / Applicability Question |
+|---|---|---|
+| **Asset context** | Source system, lookup/sync timestamp, asset ID, criticality, owner, environment | Did the value describe the asset at alert time, or only its current state? |
+| **Identity/user context** | Directory/HR source, lookup timestamp, account status, role, manager, privilege level | Did the role/status apply during the alert window? |
+| **Threat intelligence** | TI provider, lookup timestamp, first/last seen, confidence, source collection, indicator type | Is this a current indicator judgment, copied case note, or stale lookup? |
+| **GeoIP/ASN/provider tags** | Provider, lookup timestamp, ASN, cloud/VPN/CDN/scanner category, confidence | Is the tag enough to explain the behavior, or only a weak context signal? |
+| **Historical disposition** | Case ID, rule version, asset/user match, closure reason, closure timestamp | Does the prior benign/FP decision still apply after rule, asset, user, or environment drift? |
+
+Use this enrichment evidence block when an enrichment affects priority or disposition:
+
+```
+Enrichment Freshness and Provenance:
+- Enrichment:          [asset / user / TI / GeoIP / ASN / historical disposition]
+- Source:              [system/provider/case ID]
+- Lookup/Sync Time:    [timestamp or Not Evaluable]
+- Alert-Time Fit:      [fits alert time | current-only | stale | unknown | Not Evaluable]
+- Confidence:          [high | medium | low | unknown]
+- Decision Impact:     [raise priority | lower priority | close as BTP/FP | no change]
+- Missing Evidence:    [fields required before closure or de-escalation]
+```
+
+**Finding triggers:**
+
+```
+TRIAGE-ENRICH-01: Alert priority lowered using stale CMDB, asset, or identity context
+TRIAGE-ENRICH-02: Alert closed as BTP/FP using copied or stale threat-intel notes without current lookup evidence
+TRIAGE-ENRICH-03: Cloud/VPN/CDN/scanner/provider tag used as sole benign explanation without activity-context corroboration
+TRIAGE-ENRICH-04: Current enrichment state used as alert-time evidence after the asset, user, IP, or rule changed
+TRIAGE-ENRICH-05: Historical benign disposition reused without matching rule version, asset, user, environment, and time scope
+TRIAGE-ENRICH-06: Missing enrichment automatically escalates or closes an alert instead of being marked Unknown or Not Evaluable
+```
 
 ### Phase 2: Correlate
 
@@ -138,6 +177,8 @@ Assign a priority level based on the combination of asset criticality, threat se
 | Confidence level | Multiple corroborating signals | Single low-fidelity signal |
 | Business context | During M&A, audit, or incident response | Normal operations |
 
+Enrichment evidence can modify priority only when its provenance, lookup/sync time, confidence, and alert-time fit are documented. Stale or `Not Evaluable` enrichment should not by itself lower priority or close the alert.
+
 ### Phase 4: Escalate
 
 Determine whether the alert requires escalation and to whom.
@@ -194,7 +235,7 @@ Produce the triage decision as a structured report:
 ```markdown
 ## Alert Triage Report
 **Date:** [YYYY-MM-DD HH:MM UTC]
-**Skill:** alert-triage v1.0.0
+**Skill:** alert-triage v1.0.1
 **Frameworks:** MITRE ATT&CK v16, NIST SP 800-61 Rev 2
 **Analyst:** [Name or AI-assisted]
 
@@ -233,6 +274,12 @@ Produce the triage decision as a structured report:
 - **Lateral:** [Related alerts on other hosts/users]
 - **Threat Intel:** [IOC match results]
 - **Kill Chain Position:** [Where this falls in the attack lifecycle]
+
+### Enrichment Freshness and Provenance
+| Enrichment | Source | Lookup/Sync Time | Alert-Time Fit | Confidence | Decision Impact | Missing Evidence |
+|------------|--------|------------------|----------------|------------|-----------------|------------------|
+| Asset criticality | [CMDB/source] | [timestamp] | [fits/current-only/stale/unknown] | [high/medium/low] | [raise/lower/no change] | [none/list] |
+| Threat intel | [provider/case] | [timestamp] | [fits/stale/unknown] | [high/medium/low] | [raise/lower/no change] | [none/list] |
 
 ### Recommended Actions
 - [ ] [Action 1 -- e.g., isolate host, disable account, block IP]
@@ -319,6 +366,10 @@ Investigating an alert in isolation without checking for activity before and aft
 
 Waiting for complete certainty before escalating a high-priority alert costs response time. NIST SP 800-61 recommends erring on the side of over-notification. If 20 minutes of investigation has not resolved the disposition and the alert involves a critical asset or privileged account, escalate to Tier 2 or the IR team with your current findings and continue investigation in parallel.
 
+### Pitfall 6: Treating Enrichment as Timeless Truth
+
+Asset inventories, user directories, GeoIP, ASN, VPN/cloud-provider tags, threat-intel confidence, and historical case dispositions drift. Record the enrichment source, lookup/sync timestamp, alert-time fit, and confidence before using it to lower priority, close as BTP/FP, or suppress similar alerts.
+
 ---
 
 ## 8. Prompt Injection Safety Notice
@@ -344,3 +395,9 @@ This skill processes user-supplied content that may include alert payloads, log 
 7. **Microsoft Sentinel Incident Triage** -- https://learn.microsoft.com/en-us/azure/sentinel/investigate-incidents
 8. **Splunk Enterprise Security Notable Event Triage** -- https://docs.splunk.com/Documentation/ES/latest/User/TriageNotableEvents
 9. **NIST Cybersecurity Framework (CSF) 2.0 -- Detect Function** -- https://www.nist.gov/cyberframework
+
+---
+
+## 10. Changelog
+
+- **1.0.1** -- Added enrichment freshness and provenance gates for asset/user context, threat intelligence, GeoIP/ASN/provider tags, historical dispositions, alert-time applicability, and Not Evaluable handling.
