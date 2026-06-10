@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [CVSS-4.0, CWE]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -47,6 +47,7 @@ Before starting, collect or confirm:
 - [ ] **Scanner platform(s):** Which scanner(s) are in use? (Qualys VMDR, Tenable Nessus/IO/SC, Rapid7 InsightVM/Nexpose, OpenVAS/Greenbone, Snyk, Trivy, Grype, Nuclei)
 - [ ] **Current scan policies:** Existing scan policy names, configurations, and plugin/check selections
 - [ ] **Scan scope:** Target IP ranges, hostnames, applications, containers, or cloud accounts
+- [ ] **Asset identity sources:** Scanner asset UUIDs, cloud resource IDs, instance launch timestamps, AMI/image IDs, container image digests, Kubernetes UIDs, and asset-inventory snapshot timestamps
 - [ ] **Authentication status:** Are scans currently authenticated (credentialed) or unauthenticated?
 - [ ] **False positive examples:** Specific findings suspected or confirmed as false positives, with evidence
 - [ ] **Scan frequency:** Current scan schedule and any performance constraints
@@ -92,11 +93,64 @@ False Positive Record:
 - CVE ID:              [CVE-YYYY-NNNNN or N/A]
 - CWE:                 [CWE-NNN or N/A]
 - Affected Asset:      [hostname/IP]
+- Stable Asset ID:     [scanner UUID | cloud instance/resource ID | image digest | Kubernetes UID]
+- Inventory Timestamp: [YYYY-MM-DDTHH:MM:SSZ]
 - Scanner Severity:    [Critical/High/Medium/Low/Info]
 - FP Pattern:          [Version-based | Banner | Protocol | OS Misidentification | Container | Informational | Compensated]
 - Evidence:            [Specific evidence proving false positive]
 - Verification Method: [Package manager check | Authenticated re-scan | Manual testing | Configuration review]
 - Disposition:         [Confirmed FP -- suppress | Accepted Risk -- document | True Positive -- remediate]
+```
+
+### Step 1A: Asset Identity Freshness Gate
+
+Before marking a finding as true positive, false positive, suppressed, or severity-adjusted, prove that the scanner finding is bound to the same asset currently in scope. IP addresses, hostnames, mutable image tags, NAT addresses, and load balancer endpoints are not stable enough on their own in elastic cloud, container, or Kubernetes environments.
+
+**Required evidence:**
+
+| Asset Type | Stable Identity Evidence | Freshness Evidence |
+|---|---|---|
+| VM / cloud instance | Scanner asset UUID plus cloud instance/resource ID, launch time, image/AMI ID, account/project, region/zone | Inventory snapshot timestamp after scan; proof the IP/hostname still maps to the same instance |
+| Container image | Immutable image digest (`sha256:`), registry, repository, tag-at-scan, build/deploy timestamp | Runtime inventory or orchestrator evidence showing the same digest is running |
+| Kubernetes workload | Cluster UID/name, namespace, workload UID, pod UID, node instance ID, image digest | Deployment or pod inventory timestamp and rollout revision |
+| External endpoint / load balancer | Scanner target, backend mapping, service owner, deployment revision | Evidence tying the scanned endpoint to the backend workload that is currently in scope |
+
+**Finding rules:**
+
+- Treat stale scan results as **Not Evaluable** or false-positive candidates when the IP/hostname now maps to a different instance, image digest, AMI, Kubernetes UID, or scanner asset UUID.
+- Do not suppress a finding globally by IP, hostname, image tag, or load balancer address when a stable identity is available.
+- Invalidate or revalidate suppressions when the asset identity changes: instance replacement, image digest change, AMI change, Kubernetes UID change, scanner asset UUID merge/split, or cloud resource recreation.
+- For external scanners that only see a shared endpoint, require backend mapping evidence before assigning a finding to a specific asset. If backend identity cannot be proven, mark the result **Not Evaluable** rather than true positive or false positive.
+
+**Example stale compute finding:**
+
+```yaml
+scan_result:
+  scanner: Tenable
+  scanner_asset_uuid: tenable-asset-old
+  cve: CVE-2025-12345
+  asset_key_used_by_scanner: 172.20.5.44
+  cloud_instance_id: i-old-prod-api
+  scan_completed_at: "2026-06-03T02:00:00Z"
+current_inventory:
+  ip: 172.20.5.44
+  cloud_instance_id: i-new-prod-api
+  launch_time: "2026-06-07T18:00:00Z"
+  scanner_asset_uuid: tenable-asset-new
+disposition: stale_scan_not_current_asset
+```
+
+**Example container tag drift:**
+
+```yaml
+scanner_finding:
+  image: registry.example.com/app/api:latest
+  digest_at_scan: sha256:oldvulnerabledigest
+runtime_inventory:
+  image: registry.example.com/app/api:latest
+  digest_running: sha256:newpatchdigest
+  deployed_at: "2026-06-08T10:00:00Z"
+disposition: revalidate_against_running_digest
 ```
 
 ### Step 2: Scan Policy Configuration
@@ -207,6 +261,8 @@ Severity Override Record:
 - CVE ID:              [CVE-YYYY-NNNNN]
 - CWE:                 [CWE-NNN]
 - Asset:               [hostname/IP]
+- Stable Asset ID:     [scanner UUID | cloud instance/resource ID | image digest | Kubernetes UID]
+- Identity Freshness:  [Current | Stale | Not Evaluable]
 - Original Severity:   [Scanner severity and CVSS score]
 - Overridden Severity: [Adjusted severity and CVSS 4.0 Environmental score]
 - Override Direction:   [Up | Down | Suppress]
@@ -290,9 +346,9 @@ Classify the overall scanner tuning state into one of the following:
 | Classification | Definition | Criteria |
 |---|---|---|
 | **Poorly Tuned** | Scanner produces unreliable results | False positive rate > 30%, unauthenticated only, no severity overrides documented, no cross-scanner correlation |
-| **Basic** | Scanner operational but significant tuning gaps | False positive rate 15-30%, partial credential coverage, some ad-hoc overrides without documentation |
+| **Basic** | Scanner operational but significant tuning gaps | False positive rate 15-30%, partial credential coverage, some ad-hoc overrides without documentation, findings keyed only by IP/hostname in elastic environments |
 | **Tuned** | Scanner produces reliable, actionable results | False positive rate < 15%, full credentialed scanning, documented overrides, regular policy review |
-| **Optimized** | Scanner program is mature and well-integrated | False positive rate < 5%, multi-scanner correlation, automated result ingestion, severity overrides with CVSS 4.0 justification, scan scheduling aligned with change management |
+| **Optimized** | Scanner program is mature and well-integrated | False positive rate < 5%, multi-scanner correlation, automated result ingestion, severity overrides with CVSS 4.0 justification, stable asset identity freshness checks, scan scheduling aligned with change management |
 
 ---
 
@@ -303,7 +359,7 @@ Produce a structured report with these exact sections:
 ```markdown
 ## Scanner Tuning Report
 **Date:** [YYYY-MM-DD]
-**Skill:** scanner-tuning v1.0.0
+**Skill:** scanner-tuning v1.0.1
 **Frameworks:** CVSS 4.0, CWE
 **Reviewer:** AI-assisted (human review required for policy changes and severity overrides)
 
@@ -330,6 +386,12 @@ Highlight the most impactful tuning recommendations.]
 
 **Estimated False Positive Rate:** [N%]
 **Top FP Contributors:** [List top 3-5 plugins generating the most false positives]
+
+### Asset Identity Freshness
+
+| Finding ID | Scanner Asset Key | Current Stable Identity | Inventory Timestamp | Identity Status | Suppression Scope | Required Action |
+|---|---|---|---|---|---|---|
+| [ID] | [IP/hostname/scanner UUID/tag] | [instance ID/image digest/K8s UID/resource ID] | [timestamp] | [Current/Stale/Not Evaluable] | [identity-bound/IP-bound/global] | [Revalidate / Invalidate suppression / Map backend / Proceed] |
 
 ### Severity Overrides
 
@@ -399,6 +461,8 @@ Common Weakness Enumeration. A community-developed list of software and hardware
 
 5. **Not correlating results across scanners.** Organizations running multiple scanners often treat each scanner's output independently, leading to duplicate remediation efforts for the same vulnerability and missed findings that only one scanner detects. Establish a correlation process using CVE ID as the primary key and CWE as a fallback for non-CVE findings.
 
+6. **Treating IPs, hostnames, or image tags as stable asset identity.** Autoscaling, DHCP, NAT, Kubernetes node reuse, and mutable container tags can cause the same scanner asset key to represent a different workload over time. Bind findings and suppressions to scanner UUIDs, cloud resource IDs, launch timestamps, AMI/image IDs, image digests, or Kubernetes UIDs whenever possible.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -429,3 +493,10 @@ Common Weakness Enumeration. A community-developed list of software and hardware
 - Grype: https://github.com/anchore/grype
 - Nuclei: https://docs.projectdiscovery.io/tools/nuclei/
 - NVD (NIST): https://nvd.nist.gov/
+
+---
+
+## Changelog
+
+- **1.0.1** -- Added asset identity freshness gates for ephemeral cloud instances, mutable container tags, Kubernetes workloads, scanner asset UUIDs, suppression invalidation, and stale-scan Not Evaluable handling.
+- **1.0.0** -- Initial release. Vulnerability scanner false-positive analysis, scan policy tuning, authenticated scanning, severity overrides, cross-scanner correlation, and scan scheduling guidance.
