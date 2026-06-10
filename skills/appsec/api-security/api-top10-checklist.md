@@ -102,6 +102,76 @@ Both can coexist in a single endpoint. An endpoint may lack both a role check (B
 - [ ] Resource identifiers are UUIDs or non-sequential values to resist enumeration.
 - [ ] GraphQL resolvers enforce authorization on every field that returns sensitive data.
 
+### Cursor Pagination Authorization Gate
+
+Cursor pagination can be a BOLA vector when the cursor embeds tenant, user, filter, sort, or object-position state that is trusted without integrity protection and current authorization checks.
+
+```python
+# VULNERABLE: Client-controlled cursor changes tenant scope
+@app.route('/api/v1/accounts')
+@require_auth
+def list_accounts():
+    cursor = json.loads(base64.urlsafe_b64decode(request.args['cursor']))
+    tenant_id = cursor.get('tenant_id', current_user.tenant_id)
+    after_id = cursor.get('after_id')
+
+    rows = (
+        Account.query
+        .filter(Account.tenant_id == tenant_id)
+        .filter(Account.id > after_id)
+        .limit(100)
+        .all()
+    )
+    return jsonify([row.to_dict() for row in rows])
+```
+
+Remediation:
+
+```python
+# SECURE: Server-issued cursor is integrity-protected and revalidated
+@app.route('/api/v1/accounts')
+@require_auth
+def list_accounts():
+    claims = verify_cursor(
+        request.args.get('cursor'),
+        audience='accounts:list',
+        max_age_seconds=900,
+    )
+    if claims and claims['tenant_id'] != current_user.tenant_id:
+        abort(403)
+
+    page_size = 50
+    rows = (
+        Account.query
+        .filter(Account.tenant_id == current_user.tenant_id)
+        .filter(
+            tuple_(Account.created_at, Account.id) <
+            (claims['last_seen_at'], claims['last_id'])
+            if claims else True
+        )
+        .order_by(Account.created_at.desc(), Account.id.desc())
+        .limit(page_size + 1)
+        .all()
+    )
+    return jsonify({
+        'items': [row.to_dict() for row in rows[:page_size]],
+        'next_cursor': sign_cursor({
+            'tenant_id': current_user.tenant_id,
+            'aud': 'accounts:list',
+            'last_seen_at': rows[-1].created_at.isoformat(),
+            'last_id': rows[-1].id,
+        }) if len(rows) > page_size else None,
+    })
+```
+
+Review checklist:
+
+- [ ] Cursor values are server-issued and integrity-protected; base64 encoding alone is not accepted.
+- [ ] Cursor claims are bound to the authenticated principal, tenant, endpoint/audience, query shape, and page-size policy.
+- [ ] Authorization is rechecked on every cursor request, not only when the first page is issued.
+- [ ] GraphQL Relay-style cursors follow the same integrity, tenant-binding, and authorization rules.
+- [ ] Cursor reuse across endpoints or lower-sensitivity lists is rejected.
+
 ---
 
 ## API2:2023 -- Broken Authentication
@@ -267,10 +337,35 @@ query {
 app.use(express.json()); // Default limit may be very large or unconfigured
 ```
 
+```javascript
+// VULNERABLE: Cursor page size is capped, but ordering is unstable and cursor is replayable
+app.get('/api/v1/audit-events', requireAuth, async (req, res) => {
+  const cursor = JSON.parse(Buffer.from(req.query.cursor || '{}', 'base64url'));
+  const rows = await db.auditEvents.findMany({
+    where: {
+      tenantId: req.user.tenantId,
+      createdAt: { lt: cursor.createdAt || new Date() }
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 100
+  });
+
+  res.json({
+    items: rows,
+    next_cursor: Buffer.from(JSON.stringify({
+      createdAt: rows.at(-1)?.createdAt
+    })).toString('base64url')
+  });
+});
+```
+
 ### Remediation Guidance
 
 - Implement rate limiting at the API gateway and/or application layer. Use sliding window or token bucket algorithms. Set per-endpoint limits based on expected legitimate usage.
 - Enforce maximum pagination size (e.g., `limit` capped at 100). Default to a reasonable page size (e.g., 20).
+- For cursor pagination, enforce a server-side page size, sign or otherwise integrity-protect the cursor, bind it to one endpoint/query shape and principal/tenant, and set a bounded lifetime.
+- Use a deterministic unique sort tuple (for example, `(created_at, id)` rather than `created_at` alone) and document whether the list is snapshot-consistent, high-watermark based, or intentionally eventually consistent.
+- Define safe behavior for stale or replayed cursors: reject, restart from a bounded high-watermark, or return a consistent error. Monitor repeated cursor scans against expensive endpoints.
 - Set maximum request body sizes (`express.json({ limit: '1mb' })`).
 - For GraphQL: enforce query depth limits (e.g., max depth 5), complexity analysis (weighted field costs), and batch query limits.
 - Set execution timeouts for database queries and downstream API calls.
@@ -280,6 +375,8 @@ app.use(express.json()); // Default limit may be very large or unconfigured
 
 - [ ] Rate limiting is configured for all endpoints, with stricter limits on expensive operations.
 - [ ] Pagination has a maximum page size enforced server-side.
+- [ ] Cursor pagination uses a stable unique sort tuple and documents snapshot, high-watermark, or eventual-consistency behavior.
+- [ ] Cursor replay, expiry, audience binding, and repeated-scan monitoring are defined for expensive list/search/export endpoints.
 - [ ] Request body size limits are configured.
 - [ ] GraphQL queries have depth limits, complexity limits, and batch restrictions.
 - [ ] Database queries and downstream calls have execution timeouts.
