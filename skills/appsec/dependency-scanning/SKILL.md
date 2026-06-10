@@ -12,7 +12,7 @@ phase: [build, deploy]
 frameworks: [SLSA-v1.0, CycloneDX, SPDX, CISA-KEV]
 difficulty: intermediate
 time_estimate: "15-30min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -181,6 +181,67 @@ Typosquatting (also called dependency confusion or combosquatting) is a supply c
 - Implement dependency confusion protections: claim your internal package names on public registries, or use registry proxy tools like Artifactory or Nexus with routing rules.
 - Run `socket.dev`, `npm audit signatures`, or `sigstore` verification to validate package provenance.
 
+## NPM Lifecycle Script Evidence Gate
+
+Known-CVE scanners do not fully cover install-time supply chain risk. NPM lifecycle hooks such as `preinstall`, `install`, `postinstall`, `prepack`, and `prepare` execute during dependency installation and can run in direct, transitive, workspace, file, tarball, optional, or Git dependencies. Review them as an evidence gate instead of treating "has an install script" as automatically malicious or automatically safe.
+
+### Benign Baseline
+
+A native package build verifier can be acceptable when the package is expected, pinned, reviewed, and does not perform unexpected network, credential, shell, or filesystem behavior:
+
+```json
+{
+  "dependencies": {
+    "sharp": "0.33.5",
+    "better-sqlite3": "11.3.0"
+  },
+  "scripts": {
+    "postinstall": "node scripts/verify-native-binaries.js"
+  }
+}
+```
+
+Record the lifecycle hook, owning package, direct/transitive path, command, observed behavior, and whether the project can install or test with scripts disabled. Do not fail solely because a native package has a documented `postinstall` hook.
+
+### Suspicious Patterns
+
+```json
+{
+  "dependencies": {
+    "build-toolkit": "^2.4.0"
+  }
+}
+```
+
+The direct package above can pull a transitive package with an install-time script:
+
+```json
+{
+  "name": "leftpad-helper",
+  "scripts": {
+    "postinstall": "node collect-env.js"
+  }
+}
+```
+
+Treat these as high-risk until manually reviewed:
+
+- lifecycle hooks that read environment variables, npm tokens, SSH keys, cloud credentials, or home-directory files;
+- lifecycle hooks that call shells, download binaries, make outbound network requests, or run obfuscated/minified code;
+- Git dependencies that run `prepare`, especially when pinned to a branch, tag that can move, or commit without provenance;
+- optional dependency scripts that run only on selected OS/CPU targets and are easy to miss on the review host;
+- workspace/root scripts that execute before package-level review or can affect multiple packages.
+
+### Review Checklist
+
+- [ ] Enumerate lifecycle scripts from direct and transitive dependencies, not just the root `package.json`.
+- [ ] Distinguish registry, Git, file, workspace, tarball, and optional dependencies.
+- [ ] Record package owner, direct/transitive path, lifecycle hook name, command, and observed behavior.
+- [ ] Classify network, credential, shell, binary download, filesystem traversal, and obfuscation behavior for manual review.
+- [ ] Attempt `npm ci --ignore-scripts` or the ecosystem equivalent when feasible, and record whether build/test still works without lifecycle execution.
+- [ ] Treat mutable Git dependencies with lifecycle scripts as high risk unless pinned to a reviewed commit and covered by provenance evidence.
+- [ ] Avoid false positives for documented native build or binary-verification scripts when behavior is expected, pinned, and scoped.
+
 ## Assessment Output Template
 
 When performing a dependency scan, produce findings in the following structure:
@@ -213,6 +274,12 @@ When performing a dependency scan, produce findings in the following structure:
 - [ ] Unmaintained packages (no release in 2+ years)
 - [ ] Dependency confusion risk (internal name collisions)
 
+### Lifecycle Script Evidence
+
+| Package | Direct/Transitive Path | Source Type | Hook | Command | Behavior Flags | Ignore-Scripts Result | Status |
+|---|---|---|---|---|---|---|---|
+| ... | ... | registry/git/file/workspace/tarball/optional | preinstall/install/postinstall/prepare | ... | network/credential/shell/download/none | pass/fail/not tested | benign/suspicious/not evaluable |
+
 ### Recommendations
 
 1. [Prioritized list of remediation actions]
@@ -226,8 +293,13 @@ When performing a dependency scan, produce findings in the following structure:
 4. **Vulnerability scan**: Cross-reference packages and versions against known CVE databases. Apply the EPSS+CVSS+KEV triage model.
 5. **License audit**: Extract license declarations from lockfiles or registry metadata. Flag copyleft and unlicensed packages.
 6. **Typosquatting check**: Review dependency names for patterns described in the detection section.
-7. **Supply chain assessment**: Evaluate SLSA posture -- lockfile presence, pinned versions, provenance availability.
-8. **Report**: Produce the assessment using the output template above, with prioritized remediation recommendations.
+7. **Lifecycle script review**: Enumerate direct and transitive install-time lifecycle scripts. Classify behavior, source type, direct/transitive path, mutable Git dependencies, and `--ignore-scripts` test evidence.
+8. **Supply chain assessment**: Evaluate SLSA posture -- lockfile presence, pinned versions, provenance availability.
+9. **Report**: Produce the assessment using the output template above, with prioritized remediation recommendations.
+
+## Changelog
+
+- **v1.0.1** -- Added npm lifecycle script evidence gates for direct/transitive hook enumeration, source-type classification, suspicious behavior flags, mutable Git `prepare` scripts, optional/workspace script edge cases, and `--ignore-scripts` validation evidence.
 
 ## Prompt Injection Safety Notice
 
