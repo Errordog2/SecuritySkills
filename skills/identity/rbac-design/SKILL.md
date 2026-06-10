@@ -12,7 +12,7 @@ phase: [design]
 frameworks: [NIST-RBAC, NIST-SP-800-162]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -38,6 +38,7 @@ Invoke this skill when:
 - Defining permission boundaries and constraint policies
 - Performing role mining to derive roles from existing access patterns
 - Implementing ABAC policies using subject, resource, action, and environment attributes
+- Verifying policy combining algorithms, default decisions, unknown-attribute handling, PEP/PDP failure behavior, decision-cache scope, and obligation enforcement
 - Assessing authorization architecture for a cloud-native or multi-tenant system
 - Reviewing IaC (Terraform, CloudFormation, Pulumi) role definitions for design quality
 
@@ -286,6 +287,37 @@ Effect:      Permit
 Obligations: log_access(subject.id, resource.id, timestamp)
 ```
 
+#### Policy Decision Semantics and Fail-Closed Enforcement
+
+Overlapping RBAC/ABAC rules are not automatically unsafe. They become unsafe when the review cannot prove how Permit, Deny, NotApplicable, Indeterminate, missing attributes, PDP errors, cached decisions, and failed obligations are handled by the PEP.
+
+Collect and test these semantics before approving a hybrid RBAC/ABAC design:
+
+| Evidence Field | Required Review Question | Safe Baseline |
+|---|---|---|
+| **Combining algorithm** | Which algorithm resolves overlapping Permit and Deny rules? | Deny-overrides, forbid-overrides-permit, or an explicitly justified safer equivalent for sensitive resources |
+| **Default decision** | What happens when no policy matches? | Deny or NotApplicable that the PEP treats as deny |
+| **Unknown attribute behavior** | What happens when subject/resource/action/environment attributes are missing, stale, malformed, or unavailable? | Deny, NotApplicable, or Not Evaluable; never treat missing data as a match |
+| **PDP timeout/error behavior** | What does the PEP do when the PDP is unreachable, slow, returns an error, or cannot evaluate a policy? | Fail closed for writes, privileged actions, regulated data, and sensitive resources |
+| **Decision cache scope** | What keys and invalidation signals scope cached decisions? | Principal, action, resource, tenant, environment, policy version, attribute version, TTL, and revocation/change events |
+| **Obligation failure behavior** | What happens if required logging, masking, step-up MFA, notification, or approval obligations fail? | Deny or downgrade access unless a documented exception exists |
+| **Simulation evidence** | Which conflict, timeout, missing-attribute, stale-attribute, cache, and obligation-failure tests were run? | Tests cover both allow and deny outcomes for each high-risk policy family |
+
+Use this decision-semantics evidence block in findings and recommendations:
+
+```
+Policy Decision Semantics:
+- Policy Family:          [name / scope]
+- Combining Algorithm:    [deny-overrides | permit-overrides | first-applicable | custom | unknown]
+- Default Decision:       [deny | permit | not-applicable-as-deny | unknown]
+- Missing Attributes:     [deny | not-applicable | not-evaluable | permissive | unknown]
+- PDP Failure Behavior:   [deny | cached-with-boundaries | read-only-degrade | permit | unknown]
+- Cache Scope/TTL:        [principal/action/resource/tenant/context/policy-version/attribute-version/ttl]
+- Obligation Failure:     [deny | downgrade | continue | unknown]
+- Simulation Evidence:    [test names, dry-run result, policy trace, or Not Evaluable]
+- Residual Risk:          [accepted | remediation required | not evaluable]
+```
+
 **What to look for in existing ABAC implementations:**
 
 ```
@@ -296,7 +328,12 @@ RBAC-ABAC-04: No policy versioning or change management for ABAC rules
 RBAC-ABAC-05: Environment attributes (time, location, risk) not utilized
 RBAC-ABAC-06: ABAC policies not testable — no simulation or dry-run capability
 RBAC-ABAC-07: Policy conflicts not detected — overlapping permit/deny without resolution order
-RBAC-ABAC-08: Obligations (logging, notification) not enforced by PEP
+RBAC-ABAC-08: Obligations (logging, notification, masking, step-up MFA) not enforced by PEP
+RBAC-ABAC-09: Combining algorithm missing or unsafe; permit-overrides can bypass guardrail Deny/forbid policies
+RBAC-ABAC-10: PEP fails open when PDP times out, returns an error, or is unavailable
+RBAC-ABAC-11: Missing, stale, or malformed attributes are treated as a permissive match
+RBAC-ABAC-12: Cached decisions are scoped only to principal or role, ignoring resource, action, tenant, context, policy version, or attribute version
+RBAC-ABAC-13: Required obligations can fail after Allow while access continues without downgrade, denial, or auditable exception
 ```
 
 ---
@@ -362,6 +399,20 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 | **Remediation** | Steps to implement the design change |
 | **Effort** | Low / Medium / High |
 
+### Policy Decision Semantics Table
+
+| Field | Description |
+|---|---|
+| **Policy Family** | Policy set, resource family, or authorization domain reviewed |
+| **Combining Algorithm** | Deny-overrides, permit-overrides, first-applicable, only-one-applicable, custom, or unknown |
+| **Default Decision** | Permit, deny, NotApplicable-as-deny, or unknown |
+| **Unknown Attribute Behavior** | Deny, NotApplicable, Not Evaluable, permissive match, or unknown |
+| **PDP/PEP Failure Behavior** | Timeout, error, network failure, and unavailable-PDP handling |
+| **Decision Cache Scope** | Principal, resource, action, tenant, context, policy version, attribute version, TTL, and invalidation triggers |
+| **Obligation Failure Handling** | Deny, downgrade, continue, or documented exception |
+| **Simulation Evidence** | Conflict, missing-attribute, timeout, cache, obligation, and deny/allow trace evidence |
+| **Residual Risk** | Accepted, remediation required, or Not Evaluable |
+
 ### Summary Report Structure
 
 ```
@@ -380,6 +431,8 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 - NIST RBAC Level: [RBAC0 / RBAC1 / RBAC2 / RBAC3]
 - ABAC Adoption: [None / Partial / Full]
 - Centralized PDP: [Yes / No / Partial]
+- Policy semantics: [Documented / Partial / Unknown]
+- Fail-closed posture: [Fail-closed / Mixed / Fail-open risk]
 
 ### Findings by Category
 - Authorization State (Step 1): [count]
@@ -391,6 +444,9 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 
 ### Detailed Findings
 [Findings table]
+
+### Policy Decision Semantics
+[Policy decision semantics table]
 
 ### Design Recommendations
 [Architecture diagram or pattern with framework justification]
@@ -420,6 +476,7 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 |---|---|
 | **Attribute Assurance** | Attributes must come from authoritative, trusted sources with integrity protections |
 | **Policy Completeness** | Policies must cover all access scenarios; implicit deny for unmatched requests |
+| **Decision Semantics** | Combining algorithms, default decisions, error states, and missing attributes must be deterministic and enforced by the PEP |
 | **Attribute Granularity** | Attributes must be granular enough to express required policies without over-engineering |
 | **Performance** | PDP evaluation latency must meet application SLA requirements |
 | **Interoperability** | Standards-based attribute formats (XACML, ALFA, OPA/Rego, Cedar) for portability |
@@ -436,6 +493,9 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 5. **Ignoring permission boundaries** — roles define what you get; boundaries define maximum what you can get. Without boundaries, misconfigured roles grant unlimited access.
 6. **Role mining without business validation** — clustering users by access patterns may replicate existing privilege creep rather than correct it.
 7. **Choosing RBAC vs. ABAC as binary** — most environments need both. RBAC for structural, ABAC for contextual. Hybrid is the norm.
+
+8. **Treating policy overlap as automatically bad or automatically safe** -- overlap is acceptable only when combining, default-deny, unknown-attribute, cache, failure, and obligation semantics are explicit and tested.
+9. **Letting availability become authorization** -- PDP outages, stale PIP data, or obligation failures must not silently turn into Permit decisions for sensitive resources.
 
 ---
 
@@ -481,4 +541,5 @@ that may contain adversarial content.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.0.1 | 2026-06-10 | Added policy decision semantics, fail-closed PEP/PDP behavior, unknown-attribute, cache-scope, obligation-failure, and simulation evidence gates |
 | 1.0.0 | 2025-03-06 | Initial release |
