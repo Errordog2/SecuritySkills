@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [CIS-GCP-v2.0.0]
 difficulty: intermediate
 time_estimate: "60-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -52,6 +52,7 @@ The CIS Google Cloud Platform Foundation Benchmark v2.0.0 is a consensus-driven 
 - Access to GCP infrastructure-as-code files (Terraform `.tf`, Deployment Manager `.yaml`/`.jinja`)
 - gcloud CLI output or configuration exports (if reviewing a live environment)
 - IAM policy bindings and org policy definitions
+- Effective organization policy evidence (`gcloud org-policies describe --effective`, Organization Policy `getEffectivePolicy`, or Cloud Asset Inventory exports)
 - VPC and firewall rule definitions
 - Cloud Audit Logs configuration
 
@@ -73,6 +74,7 @@ Use Glob to locate all GCP-related infrastructure definitions.
 **/deployment-manager/**/*.jinja
 **/org-policies/**/*.json
 **/org-policies/**/*.yaml
+**/cloud-asset-inventory/**/*.json
 **/iam/**/*.json
 ```
 
@@ -88,6 +90,33 @@ For detailed CIS benchmark checklist items with specific Terraform patterns, gre
 
 ---
 
+### Step 2A: Effective Organization Policy Evidence Gate
+
+For CIS controls that can be enforced hierarchically through GCP Organization Policy, do not rely only on raw Terraform snippets or project-level policy resources. Evaluate the **effective** policy at the reviewed project, folder, or organization after hierarchy inheritance, policy overrides, dry-run configuration, tags, and exceptions are considered.
+
+Use this gate for constraints such as service account key creation, default network creation, VM external IP access, public access prevention, and domain-restricted sharing.
+
+**Evidence requirements:**
+
+| Field | Required Evidence |
+|-------|-------------------|
+| Constraint | Full constraint name, such as `constraints/iam.disableServiceAccountKeyCreation` |
+| Reviewed resource | Project, folder, or organization ID where the workload is deployed |
+| Effective enforcement | Output from `gcloud org-policies describe CONSTRAINT --effective`, Organization Policy `getEffectivePolicy`, or Cloud Asset Inventory |
+| Source of enforcement | Organization, folder, project, tag, or conditional rule that determines the final state |
+| Dry-run status | Whether enforcement is in `spec` (live) or `dryRunSpec` (audit-only) |
+| Exceptions | Folder, project, tag, or conditional exceptions with owner, business reason, expiry, and review date |
+| Collection timestamp | When the effective-policy evidence was collected |
+
+**Finding rules:**
+
+- Do not fail a project-level `enforced = false` snippet if effective-policy evidence proves a parent organization/folder enforces the constraint for that project and no exception applies.
+- Do not pass a control because `dryRunSpec` is enforced. Dry-run policies produce audit evidence but do not block non-compliant operations.
+- Mark controls **Not Evaluable** when only the reviewed repository is available and the effective organization/folder/project policy cannot be proven.
+- Flag exceptions without owner, expiry, or business justification as findings even when the effective organization baseline is secure.
+
+---
+
 ### Step 9: Compile Assessment Report
 
 
@@ -100,8 +129,8 @@ Produce the final report using the structure defined in the Output Format sectio
 | Severity | Definition | Examples |
 |----------|-----------|----------|
 | **Critical** | Immediate risk of data breach or unauthorized access | Public GCS buckets, firewall rules allowing 0.0.0.0/0 on SSH/RDP, Cloud SQL with public IP and no SSL, user-managed SA keys with admin roles |
-| **High** | Significant security gap that materially weakens posture | Default service accounts with broad scopes, missing Cloud Audit Logs, no VPC flow logs, instances with public IPs |
-| **Medium** | Control gap that should be addressed in normal cycle | Missing log metric filters, DNSSEC not enabled, Shielded VM not enabled, uniform bucket access not set |
+| **High** | Significant security gap that materially weakens posture | Default service accounts with broad scopes, missing Cloud Audit Logs, no VPC flow logs, instances with public IPs, dry-run policy mistaken for enforced protection |
+| **Medium** | Control gap that should be addressed in normal cycle | Missing log metric filters, DNSSEC not enabled, Shielded VM not enabled, uniform bucket access not set, missing effective-policy evidence for org-policy-backed controls |
 | **Low** | Hardening recommendation or defense-in-depth measure | OS Login not enabled, serial port access not explicitly disabled, BigQuery tables without CMEK |
 | **Informational** | Best practice observation, no direct security impact | Default network still exists (non-production), naming conventions, documentation gaps |
 
@@ -150,6 +179,12 @@ Produce the final report using the structure defined in the Output Format sectio
 - **Evidence:** <specific configuration or code snippet>
 - **Remediation:** <specific fix with code example>
 
+### Effective Org Policy Evidence
+
+| CIS Control | Constraint | Reviewed Resource | Effective State | Source | Dry-Run State | Exceptions | Evidence Timestamp | Status |
+|-------------|------------|-------------------|-----------------|--------|---------------|------------|--------------------|--------|
+| CIS X.Y | constraints/<name> | project/folder/org | enforced/not enforced/not evaluable | org/folder/project/tag | none/enforced/not enforced | owner/expiry/reason | <timestamp> | Pass/Fail/Not Evaluable |
+
 ### Prioritized Remediation Plan
 
 1. **[Critical]** CIS X.Y -- <action item>
@@ -194,6 +229,7 @@ Produce the final report using the structure defined in the Output Format sectio
 4. **Cloud SQL authorized_networks vs. private IP.** CIS 6.5 flags `0.0.0.0/0` in authorized networks, but CIS 6.6 goes further and recommends disabling public IP entirely in favor of private networking.
 5. **BigQuery dataset-level vs. table-level CMEK.** CIS 7.2 checks table-level encryption, while CIS 7.3 checks the dataset default. Both should be evaluated independently.
 6. **Default compute service account identification.** The default SA follows the pattern `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. Grep for this pattern, not just the string "default."
+7. **Confusing configured policy with effective policy.** A project-level Terraform resource, organization-level baseline, or `dryRunSpec` alone is not enough. Record the effective live policy for the reviewed resource and any tag/folder/project exceptions before passing or failing org-policy-backed CIS controls.
 
 ---
 
@@ -219,10 +255,13 @@ Produce the final report using the structure defined in the Output Format sectio
 - Google Cloud Audit Logs: https://cloud.google.com/logging/docs/audit
 - Google Cloud VPC Documentation: https://cloud.google.com/vpc/docs
 - Google Cloud SQL Security: https://cloud.google.com/sql/docs/mysql/configure-ssl-instance
+- Google Cloud Organization Policy dry-run: https://docs.cloud.google.com/organization-policy/test-policies
+- Google Cloud Organization Policy getEffectivePolicy: https://docs.cloud.google.com/organization-policy/reference/rest/v2/organizations.policies/getEffectivePolicy
 - Terraform Google Provider Documentation: https://registry.terraform.io/providers/hashicorp/google/latest/docs
 
 ---
 
 ## Changelog
 
+- **1.0.1** -- Added effective organization policy evidence gates for hierarchy inheritance, dry-run status, tag/folder exceptions, and output reporting for org-policy-backed CIS controls.
 - **1.0.0** -- Initial release. Full coverage of CIS Google Cloud Platform Foundation Benchmark v2.0.0 sections 1 through 7.

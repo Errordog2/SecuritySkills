@@ -2,6 +2,31 @@
 
 This file contains the detailed CIS benchmark checklist items for the GCP Security Posture Review skill. See [SKILL.md](SKILL.md) for the main skill definition, process overview, and output format.
 
+## Cross-Cutting Gate -- Effective Organization Policy Evidence
+
+Several CIS GCP recommendations can be enforced by Organization Policy at the organization, folder, project, or tag level. For those controls, raw Terraform can be misleading:
+
+- a project-level policy may look non-enforced while a parent folder or organization enforces the constraint;
+- an organization-level baseline may look enforced while a folder, project, or tag exception changes the effective result;
+- `dryRunSpec` may show intended enforcement but does not block non-compliant operations.
+
+When a CIS control depends on an Organization Policy constraint, record:
+
+| Evidence Field | Examples |
+|----------------|----------|
+| Constraint | `constraints/iam.disableServiceAccountKeyCreation`, `constraints/compute.skipDefaultNetworkCreation`, `constraints/compute.vmExternalIpAccess`, `constraints/storage.publicAccessPrevention` |
+| Reviewed resource | `projects/analytics-prod`, `folders/5555`, `organizations/1234567890` |
+| Effective policy | `gcloud org-policies describe CONSTRAINT --project PROJECT --effective`, Organization Policy `getEffectivePolicy`, or Cloud Asset Inventory evidence |
+| Live vs. dry-run | Live `spec` enforcement vs. audit-only `dryRunSpec` |
+| Exception scope | folder, project, tag, condition, owner, reason, expiry, and review date |
+| Evidence timestamp | collection time for the effective-policy export |
+
+**Safe downgrade example:** A project-level Terraform resource sets `enforced = false`, but effective-policy evidence shows the parent organization enforces the constraint for the reviewed project and no exception applies.
+
+**Finding example:** A storage public-access-prevention policy is present only in `dryRunSpec`, while the live `spec` is not enforced. Treat this as not enforced for CIS pass/fail purposes.
+
+**Not Evaluable example:** The repository contains only project-level Terraform, and no effective policy export is available for parent organization/folder/tag rules.
+
 ---
 
 ## Section 1 -- Identity and Access Management
@@ -40,6 +65,19 @@ resource "google_service_account_key" {
 ```
 
 Look for any `google_service_account_key` resources. GCP-managed keys (used automatically by Compute Engine, GKE, etc.) do not require explicit creation.
+
+Also check effective organization policy evidence for service account key creation:
+
+```hcl
+resource "google_project_organization_policy" "disable_sa_key_creation" {
+  constraint = "iam.disableServiceAccountKeyCreation"
+  boolean_policy {
+    enforced = false
+  }
+}
+```
+
+Do not fail the project-level `enforced = false` snippet if effective-policy evidence proves a parent organization or folder enforces `constraints/iam.disableServiceAccountKeyCreation` for the reviewed project. Do not pass if enforcement appears only in `dryRunSpec`.
 
 ### CIS 1.5 -- Ensure that Service Account Has No Admin Privileges
 
@@ -322,6 +360,8 @@ resource "google_organization_policy" {
 }
 ```
 
+Confirm the effective policy for `constraints/compute.skipDefaultNetworkCreation`. If only a raw project policy or organization baseline is supplied, record whether folder/project/tag exceptions can change the effective state for the reviewed project.
+
 ### CIS 3.2 -- Ensure Legacy Networks Do Not Exist for Older Projects
 
 Check for legacy networks (non-VPC):
@@ -522,6 +562,8 @@ resource "google_compute_instance" {
 }
 ```
 
+For environments that use Organization Policy to restrict public IPs, require effective policy evidence for `constraints/compute.vmExternalIpAccess`. Tag or folder exceptions can be legitimate for sandbox or break-glass projects, but they need owner, business reason, expiry, and review date before downgrading a finding.
+
 ### CIS 4.11 -- Ensure that Compute Instances Have Confidential Computing Enabled
 
 ```hcl
@@ -563,6 +605,8 @@ resource "google_organization_policy" {
   }
 }
 ```
+
+Confirm that public access prevention is enforced in the live effective policy, not only in `dryRunSpec`. If an inherited organization policy is secure but a project or tag exception applies to the reviewed bucket/project, score the control using the effective result and document the exception owner, reason, and expiry.
 
 ### CIS 5.2 -- Ensure that Cloud Storage Buckets Have Uniform Bucket-Level Access Enabled
 
