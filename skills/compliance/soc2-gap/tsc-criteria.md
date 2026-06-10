@@ -327,17 +327,81 @@ This file contains the detailed Trust Services Criteria evaluation questions, ev
   - Is there a vendor management program?
   - Are vendors assessed for security risk before onboarding?
   - Are vendor SOC 2 reports or equivalent assurance reports collected and reviewed?
+  - Are critical vendors tiered by customer impact, data access, operational dependency, and recovery criticality?
+  - Has management assessed concentration risk where multiple in-scope services, regions, customer commitments, or control activities depend on the same provider?
+  - Is there an exit plan or fallback procedure for each critical vendor, including tested portability, export, restoration, termination, and deletion evidence?
+  - Are subservice organizations and material fourth parties monitored for changes that affect the system description or control commitments?
+  - Are unresolved concentration or exit-readiness risks assigned an owner, review cadence, trigger events, and formal risk acceptance?
 - Evidence to look for:
   - Vendor management policy
   - Vendor risk assessment questionnaires (completed)
   - Vendor SOC 2 report review records
   - Vendor inventory with risk classifications
   - Contract provisions for security requirements (data processing agreements, BAAs)
+  - Critical vendor tiering criteria and completed tier assignments
+  - Concentration analysis showing shared vendors across in-scope services, regions, data stores, authentication, hosting, support, monitoring, backups, or customer commitments
+  - Exit plans, fallback procedures, and tested export/restore or data portability evidence for critical vendors
+  - Termination, data return, and deletion procedures with evidence from a test, offboarding event, or vendor attestation
+  - Subservice organization review records, change notifications, bridge letters, and assessment of downstream dependencies
+  - Risk acceptance records for unresolved sole-source, portability, or subservice dependency risks with owner, expiry, and next review date
 - Common gaps:
   - No formal vendor management program
   - Vendor SOC 2 reports are not collected or reviewed
   - No vendor risk assessment performed prior to onboarding
   - Contracts lack security and data protection provisions
+  - Critical vendors are identified, but there is no concentration analysis or exit-readiness evidence
+  - A sole-source vendor supports multiple in-scope services without fallback, portability, or management risk acceptance
+  - Data export is contractually promised but has not been tested or restored into an alternate environment
+  - Subservice organization changes are not reviewed for audit-scope, data-processing, or control-impact changes
+  - Vendor exit plans have no named owner, review cadence, trigger events, or renewal/retirement decision
+
+#### CC9.2 Critical Vendor Concentration and Exit Evidence Gate
+
+Do not score CC9.2 as fully managed based only on a vendor inventory, annual SOC report collection, or standard data processing agreement. For critical vendors, require evidence that management understands dependency concentration and can execute an orderly exit or fallback path.
+
+Use the following gate before marking a critical vendor control as **Defined** or **Managed**:
+
+| Evidence Area | Required Evidence | Finding Trigger |
+|---------------|-------------------|-----------------|
+| Critical vendor tiering | Tier criteria; assigned tier; business owner; customer/data/control impact | No tiering or owner for vendors that host, process, authenticate, monitor, back up, or support in-scope services |
+| Concentration analysis | Dependent services; shared regions; common control dependencies; sole-source assessment | Multiple in-scope services depend on one vendor without documented risk treatment |
+| Exit and fallback plan | Exit owner; alternate provider/process; fallback runbook; decision triggers | No actionable fallback for a critical vendor or customer commitment |
+| Portability test | Export sample; restore/import evidence; integrity checks; elapsed time; unresolved blockers | Export exists only on paper, or restore has never been tested |
+| Termination and deletion | Contractual return/deletion terms; deletion certificate or test; access revocation path | No evidence that customer data can be returned, deleted, and access revoked during exit |
+| Subservice dependency monitoring | Subservice list; SOC report subservice review; bridge letters; material-change notifications | Vendor subservice changes are not reviewed for audit-scope or control impact |
+| Risk acceptance | Named owner; approver; expiry/review date; compensating controls; trigger events | Sole-source or portability risk remains unresolved with no formal acceptance |
+
+**Example controlled evidence:**
+
+```yaml
+critical_vendor:
+  name: primary-cloud-provider
+  tier: critical
+  dependent_services:
+    - production hosting
+    - managed database
+    - backup storage
+  concentration_risk: "three in-scope services rely on one provider and one region"
+  exit_owner: platform-director
+  fallback_procedure: CLOUD-EXIT-17
+  portability_test:
+    export_completed_at: "2026-05-30"
+    restore_target: alternate-region-sandbox
+    integrity_check: passed
+    elapsed_time_hours: 11
+  subservice_review:
+    last_reviewed: "2026-06-01"
+    material_changes: none
+  risk_acceptance:
+    owner: cto
+    expires: "2026-09-30"
+    trigger_events:
+      - customer enterprise commitment
+      - new regulated data store
+      - vendor subservice change
+```
+
+**Finding classification guidance:** Missing critical-vendor tiering or no owner for a critical dependency is at least **High**. Untested exit/restore evidence for a sole-source vendor that supports customer commitments is **High**. Missing subservice review or stale bridge-letter review is **Medium**. Missing trigger events, cadence, or expiry on an otherwise documented risk acceptance is **Medium**.
 
 ---
 
@@ -553,7 +617,7 @@ After scoring, calculate:
 | CC7.5 | DR plan; BC plan; backup configs; backup restoration test records |
 | CC8.1 | Change management policy; CI/CD pipeline configs with approval gates; PR review records; CAB minutes; segregation of duties evidence |
 | CC9.1 | Risk treatment plans; business impact analysis; risk acceptance sign-off records |
-| CC9.2 | Vendor management policy; vendor risk assessments; vendor SOC 2 review records; vendor inventory; DPAs/BAAs |
+| CC9.2 | Vendor management policy; vendor risk assessments; vendor SOC 2 review records; vendor inventory; DPAs/BAAs; critical vendor tiering; concentration analysis; exit/fallback plans; portability or export/restore test evidence; subservice organization review records; concentration-risk acceptance records |
 | A1.1 | Capacity monitoring dashboards; auto-scaling configs; capacity planning documentation |
 | A1.2 | Backup policy with RPO/RTO; backup monitoring records; restoration test results; redundancy configs |
 | A1.3 | DR test plan; DR test execution records; DR test findings and remediation |

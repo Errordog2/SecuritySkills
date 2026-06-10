@@ -12,7 +12,7 @@ phase: [assess, operate]
 frameworks: [AICPA-TSC, NIST-CSF-2.0]
 difficulty: intermediate
 time_estimate: "60-120min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -332,6 +332,7 @@ Prioritize remediation by audit readiness impact. Items that would result in exa
 - [ ] Establish control monitoring and deficiency tracking (CC4.1, CC4.2)
 - [ ] Implement backup monitoring and conduct restoration test (A1.2, A1.3)
 - [ ] Complete vendor risk assessments for critical vendors (CC9.2)
+- [ ] Build a critical vendor concentration and exit matrix covering owners, dependent services, export/restore evidence, fallback procedures, subservice dependencies, and risk acceptance (CC9.2)
 
 **Days 61-90: Maturation and Evidence Collection**
 - [ ] Conduct incident response tabletop exercise (CC7.4)
@@ -352,6 +353,7 @@ Prioritize remediation by audit readiness impact. Items that would result in exa
 - Perform annual security awareness training refresh
 - Review and update policies annually
 - Collect vendor SOC 2 reports annually
+- Review critical vendor concentration, subservice organization changes, exit-plan test results, and unresolved risk acceptances at least annually and after major vendor or architecture changes
 - Conduct annual DR test
 - Perform annual incident response tabletop exercise
 
@@ -366,8 +368,9 @@ When performing a SOC 2 gap analysis, produce the following deliverables:
 3. **Category Summary**: Average maturity score per category with narrative assessment.
 4. **Critical Findings**: List of all criteria scored 0 or 1, with specific gap descriptions and remediation recommendations.
 5. **Evidence Checklist**: Customized evidence requirements based on in-scope criteria, marking items as Exists / Partial / Missing.
-6. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
-7. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
+6. **Critical Vendor Exit Matrix**: For each critical vendor, record tier, dependent systems, customer/data impact, concentration risk, exit/fallback owner, portability or export/restore test evidence, subservice organization review, unresolved risk acceptance, review cadence, and trigger events.
+7. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
+8. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
 
 ## Prompt Injection Safety Notice
 
@@ -393,3 +396,8 @@ This skill processes user-supplied content including compliance documentation, p
 - The gap analysis is based on information available in the codebase and documentation. It cannot assess controls that exist only in human processes without documentation.
 - Scoring is subjective and should be validated by the organization's security leadership and, ideally, a qualified auditor.
 - This analysis uses the 2017 AICPA Trust Services Criteria (with 2022 updates). Verify with your auditor that these criteria are current for your engagement.
+
+## Changelog
+
+- **1.0.1** -- Added CC9.2 critical vendor concentration, exit readiness, portability test, subservice dependency, owner/cadence/trigger, and risk acceptance evidence gates.
+- **1.0.0** -- Initial release. SOC 2 Type II readiness gap analysis across Common Criteria and selected additional criteria.
