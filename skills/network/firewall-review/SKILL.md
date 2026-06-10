@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [CIS-Controls-v8, NIST-SP-800-41-Rev1]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -36,6 +36,7 @@ If a target is provided via arguments, focus the review on: $ARGUMENTS
 - Incident response when lateral movement or exfiltration is suspected.
 - Pre-deployment review of new firewall rule sets or policy changes.
 - Network architecture reviews that include perimeter or internal segmentation firewalls.
+- Cloud firewall reviews where deployed security groups, NACLs, ENIs, Kubernetes policies, provider defaults, or console drift may differ from IaC files.
 
 ---
 
@@ -80,8 +81,51 @@ Record all discovered files. Categorize each by:
 - **Platform:** iptables, nftables, pf, cloud security groups, Kubernetes NetworkPolicy, vendor-specific (Palo Alto, Fortinet, Cisco ASA).
 - **Direction:** Perimeter (north-south) vs. internal (east-west).
 - **Scope:** Server, endpoint, network segment.
+- **Evidence source:** Static config/IaC, deployed cloud export, provider inventory, flow logs, SIEM, or Not Evaluable.
 
 ---
+
+### Step 1.5: Cloud Effective-State and Drift Evidence Gate
+
+For cloud and Kubernetes environments, static configuration files are not enough to prove actual exposure. A rule present in Terraform, CloudFormation, ARM, or Kubernetes YAML may not be deployed, while console changes, launch templates, default security groups, service annotations, ephemeral interfaces, or CNI behavior can create live exposure absent from the reviewed files.
+
+Before final severity assignment, collect effective deployed-state evidence:
+
+| Evidence Field | What to Capture |
+|---|---|
+| **Provider Export** | AWS security groups/NACLs/ENIs, Azure NSGs/NICs/subnets, GCP firewall rules/routes/tags, Kubernetes NetworkPolicy and CNI enforcement state |
+| **IaC-to-Deployed Drift** | Rules present only in IaC, only in deployed state, changed in both, or intentionally exempted |
+| **Attachment Inventory** | ENIs, instances, load balancers, serverless connectors, Kubernetes pods/namespaces, launch templates, autoscaling groups, and tags using the rule |
+| **Effective Direction/Default** | Provider default egress/ingress behavior, stateful vs. stateless behavior, inherited or implicit rules |
+| **Ephemeral Resource Sampling** | Short-lived runners, autoscaling nodes, serverless connectors, temporary ENIs, and build environments that may appear outside static review windows |
+| **Runtime Evidence** | Flow logs, hit counters with baseline timestamp, cloud asset inventory timestamp, SIEM events, or packet/connection evidence |
+| **Exception Evidence** | Emergency window, owner, approver, expiry, rollback plan, and revalidation trigger for accepted drift |
+
+Classify drift explicitly:
+
+```
+Cloud Effective-State Evidence:
+- Reviewed Resource:       [security group / NSG / firewall rule / NetworkPolicy / NACL]
+- Static Source:           [IaC file, config file, or Not Evaluable]
+- Deployed Source:         [provider export, asset inventory, or Not Evaluable]
+- Attachment Scope:        [instances/ENIs/LBs/pods/subnets/tags]
+- Drift Classification:    [IaC-only | deployed-only | matched | approved exception | unknown]
+- Effective Exposure:      [internet-facing | internal | isolated | no active attachment | unknown]
+- Ephemeral Coverage:      [sampled | continuous inventory | not applicable | not evaluable]
+- Exception Expiry:        [date/owner/rollback or none]
+- Decision Impact:         [pass | finding | hygiene issue | not evaluable]
+```
+
+**Finding triggers:**
+
+```
+FW-CLOUD-01: Live deployed ingress or egress exists outside reviewed IaC/config
+FW-CLOUD-02: IaC rule is flagged as active exposure without evidence it is deployed or attached
+FW-CLOUD-03: Broad rule is attached through launch template, autoscaling group, load balancer, serverless connector, or Kubernetes selector not visible in static files
+FW-CLOUD-04: Kubernetes NetworkPolicy is assumed effective without CNI enforcement evidence
+FW-CLOUD-05: Ephemeral ENIs/runners/functions create exposure windows without inventory, flow-log, or sampling evidence
+FW-CLOUD-06: Emergency or console drift lacks owner, approver, expiry, rollback, or revalidation evidence
+```
 
 ### Step 2: Rule Base Analysis -- NIST SP 800-41 Rev 1 Evaluation
 
@@ -269,6 +313,8 @@ Produce the final report using the following structure.
 | **Medium** | Shadowed permit rules; missing egress DNS restriction; unused rules (active resources); missing logging on sensitive permits; missing stealth rules. |
 | **Low** | Rule documentation gaps; suboptimal rule ordering with no current security impact; cosmetic rule base issues. |
 
+Cloud deployed-state drift that creates live internet exposure is **Critical** for broad inbound management or any/any access and **High** for sensitive internal or egress exposure. IaC-only rules that are not deployed are usually **Medium** hygiene findings unless they can be re-applied automatically without approval.
+
 ---
 
 ## Output Format
@@ -305,6 +351,11 @@ Produce the final report using the following structure.
 |-----------|--------|----------|
 | Inbound   | Pass/Fail | <rule reference> |
 | Outbound  | Pass/Fail | <rule reference> |
+
+### Cloud Effective-State and Drift
+| Resource | Static Source | Deployed Source | Attachment Scope | Drift Classification | Effective Exposure | Exception/Expiry |
+|----------|---------------|-----------------|------------------|----------------------|-------------------|------------------|
+| <sg/nsg/firewall/networkpolicy> | <IaC/config/none> | <provider export/inventory> | <instances/pods/subnets/tags> | <matched/deployed-only/IaC-only/approved/unknown> | <internet/internal/isolated/none> | <owner/date or none> |
 
 ### Shadowed Rules Summary
 | Shadowed Rule | Position | Shadowing Rule | Position | Impact |
@@ -361,6 +412,10 @@ Produce the final report using the following structure.
 
 5. **Conflating network ACLs with security groups in cloud environments.** In AWS, NACLs are stateless and operate at the subnet level; security groups are stateful and operate at the instance level. Both must be audited. A permissive NACL can undermine restrictive security group rules for responses.
 
+6. **Auditing only IaC and missing deployed drift.** Static files do not prove live exposure. Export provider state, compare attachments, and classify deployed-only, IaC-only, matched, approved-exception, and unknown drift separately.
+
+7. **Missing ephemeral attachment windows.** Autoscaling groups, build runners, serverless connectors, short-lived ENIs, and Kubernetes pods can inherit broad rules between review snapshots. Use inventory timestamps, flow logs, or sampling evidence before closing exposure as absent.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -386,4 +441,5 @@ This skill processes firewall configurations that may contain user-supplied comm
 
 ## Changelog
 
+- **1.0.1** -- Added cloud effective-state, IaC-to-deployed drift, attachment inventory, ephemeral resource, CNI enforcement, and exception-expiry evidence gates.
 - **1.0.0** -- Initial release. Full coverage of CIS Controls v8 (4.4, 4.5) and NIST SP 800-41 Rev 1 firewall audit methodology.
