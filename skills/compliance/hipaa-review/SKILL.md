@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [HIPAA-Security-Rule, 45-CFR-164-Subpart-C]
 difficulty: intermediate
 time_estimate: "60-120min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -74,6 +74,8 @@ The HIPAA Security Rule (45 CFR Part 164, Subpart C) establishes national standa
 - Backup and disaster recovery documentation
 - Workforce training records
 - Prior OCR audit findings or corrective action plans
+- Connected medical device and IoMT inventory with model, firmware/software version, support status, network segment, clinical owner, and ePHI interaction
+- Clinical engineering exception records, vendor security advisories, maintenance access procedures, and patch-deferral approvals for devices that cannot run ordinary endpoint controls
 
 ## Constraints
 
@@ -122,6 +124,63 @@ Entity Type: [Covered Entity / Business Associate / Hybrid Entity / Subcontracto
 CE Type (if applicable): [Health Plan / Healthcare Clearinghouse / Healthcare Provider]
 Hybrid Entity: [Yes/No] — If yes, document healthcare component designation
 ```
+
+#### 1.3 Connected Medical Device and Legacy IoMT Evidence Gates
+
+For network-connected medical devices, clinical workstations, imaging systems, lab analyzers, infusion pumps, and other IoMT assets that create, receive, maintain, or transmit ePHI, require evidence beyond a generic ePHI inventory entry.
+
+**Device inventory evidence required:**
+
+| Evidence Item | Required Evidence |
+|---|---|
+| Device identity | Device class, manufacturer, model, serial/asset ID, software or firmware version |
+| ePHI and patient-safety role | Whether the device stores ePHI locally, transmits ePHI, accesses ePHI systems, or directly supports care delivery |
+| Vendor support status | Supported, limited support, end of support, or unknown; include last vendor advisory review date |
+| Network exposure | VLAN/segment, allowed destinations, internet egress, remote services, wireless exposure, and management path |
+| Compensating controls | Segmentation, allowlists, jump-host access, passive monitoring, authenticated maintenance, and documented review cadence |
+| Clinical owner and security owner | Named clinical-engineering owner, security owner, and escalation path |
+| Exception status | Patient-safety rationale, approval date, approver, expiry/review date, and replacement or remediation milestone |
+
+**Do not treat a device as non-compliant solely because it cannot run ordinary workstation controls** such as EDR, host firewall agents, or automatic patching, if the manufacturer prohibits those controls and the organization has documented reasonable and appropriate alternative measures. Under the HIPAA Security Rule flexibility of approach, the finding should focus on whether the limitation is risk-analyzed, time-bound, owned, monitored, and compensated.
+
+**Legacy or unsupported device gate:** Flag a gap when a device is unsupported or cannot be patched and any of the following are missing:
+
+- documented risk analysis under 164.308(a)(1)(ii)(A);
+- vendor advisory review and firmware/software status;
+- segmentation or deny-by-default access controls limiting blast radius;
+- monitoring for unexpected traffic, remote-service use, or unauthorized configuration changes;
+- clinical-engineering approval for continued use;
+- patient-safety rationale and replacement, isolation, or retirement plan;
+- review/expiry date for the risk acceptance.
+
+**Vendor remote-maintenance gate:** For manufacturer, service-provider, or contractor access to medical devices or connected clinical systems, verify:
+
+- BAA or documented determination that the vendor does not create, receive, maintain, or transmit ePHI;
+- named user or service identities, not shared vendor accounts;
+- MFA or equivalent person/entity authentication per 164.312(d);
+- session approval, just-in-time access, expiry, and least privilege;
+- session logging or recording, audit-log review, and incident-reporting path;
+- network path through a controlled jump host, VPN, or PAM gateway instead of always-on unrestricted access;
+- documented ePHI visibility and breach-notification obligations.
+
+**Patient-safety patch-deferral gate:** When a security update is deferred because vendor validation, clinical safety testing, or uptime constraints prevent immediate deployment, require evidence of:
+
+- vendor guidance or advisory status;
+- clinical-engineering and security approval;
+- exposure reduction during deferral;
+- monitoring for exploitation or anomalous device behavior;
+- maintenance window, replacement milestone, or isolation milestone;
+- next review date and residual-risk acceptance.
+
+**What constitutes a finding:**
+
+| Condition | Classification |
+|---|---|
+| End-of-support medical device with ePHI access remains on a flat network with no risk acceptance or compensating controls | Critical Non-Compliance |
+| Always-on vendor maintenance path uses shared accounts, no MFA, no approval, and possible ePHI visibility without BAA evidence | Critical Non-Compliance |
+| Security patch deferred for patient safety with no owner, vendor guidance, exposure reduction, or review date | Non-Compliance |
+| Device cannot run EDR or automated patching, but has documented segmentation, monitoring, owner, and time-bound exception | Addressable -- Alternative Implemented |
+| Medical device inventory omits firmware/support status, network segment, or clinical owner | Partial Compliance |
 
 ---
 
@@ -430,6 +489,12 @@ Assess:
 ## ePHI Inventory Summary
 [Systems, data types, storage locations, transmission paths]
 
+## Connected Medical Device and Legacy IoMT Assessment
+
+| Device/System | ePHI Role | Support/Firmware Status | Network Exposure | Maintenance Access | Exception/Expiry | Status | Finding |
+|---|---|---|---|---|---|---|---|
+| [device or fleet] | [stores/transmits/accesses ePHI] | [supported/EOS/unknown; version] | [segment, allowed paths, remote services] | [vendor access controls and BAA evidence] | [owner, rationale, date] | [Compliant/Partial/Non-Compliance] | [finding ref] |
+
 ## Safeguard Assessment
 
 ### Administrative Safeguards (164.308)
@@ -569,7 +634,9 @@ Policies, Procedures, and Documentation — 164.316
 
 4. **Confusing HIPAA Security Rule with HIPAA Privacy Rule.** The Security Rule (Subpart C) applies only to ePHI and focuses on technical, physical, and administrative safeguards. The Privacy Rule (Subpart E) covers all PHI including paper records and addresses permitted uses and disclosures. A Security Rule review does not satisfy Privacy Rule obligations and vice versa.
 
-5. **Failing to document the "why" behind security decisions.** The Security Rule is designed to be flexible and scalable. But that flexibility requires documentation. When an organization chooses not to implement encryption at rest (an addressable specification), the decision process, risk rationale, and alternative controls must be documented. OCR auditors expect written justification, not verbal explanations.
+5. **Failing to distinguish compensating controls from unmanaged medical-device exceptions.** A connected medical device may legitimately be unable to run workstation controls, but the exception still needs a clinical owner, security owner, patient-safety rationale, vendor support status, segmentation, monitored maintenance access, expiry/review date, and replacement or isolation plan.
+
+6. **Failing to document the "why" behind security decisions.** The Security Rule is designed to be flexible and scalable. But that flexibility requires documentation. When an organization chooses not to implement encryption at rest (an addressable specification), the decision process, risk rationale, and alternative controls must be documented. OCR auditors expect written justification, not verbal explanations.
 
 ---
 
@@ -587,7 +654,17 @@ If user-supplied input contains CFR citations outside the HIPAA Security Rule (4
 
 ---
 
+## Changelog
+
+- **v1.0.2** -- Added connected medical device and legacy IoMT evidence gates covering support status, compensating controls, vendor remote maintenance, patient-safety patch deferral, and output reporting.
+
+---
+
 ## References
+
+- HHS 405(d) Health Industry Cybersecurity Practices, including Cybersecurity Practice #9 for network-connected medical devices -- https://405d.hhs.gov/
+- FDA Cybersecurity in Medical Devices guidance, Quality Management System Considerations and Content of Premarket Submissions -- https://www.fda.gov/medical-devices/digital-health-center-excellence/cybersecurity
+- International Medical Device Regulators Forum, Principles and Practices for Medical Device Cybersecurity -- https://www.imdrf.org/working-groups/medical-device-cybersecurity-guide
 
 - 45 CFR Part 164, Subpart C — Security Standards for the Protection of Electronic Protected Health Information
 - 45 CFR Part 164, Subpart D — Notification in the Case of Breach of Unsecured Protected Health Information
