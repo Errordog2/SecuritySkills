@@ -13,7 +13,7 @@ phase: [design, operate]
 frameworks: [NIST-SP-800-63B, NIST-SP-800-207, CIS-Controls-v8]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -196,6 +196,32 @@ IAM-PRIV-08: Resource-based policies granting public or overly broad access
 | Standing admin without JIT | **High** | Persistent lateral movement target |
 | Unused permissions > 90 days | **Medium** | Attack surface reduction opportunity |
 | Direct policy attachment | **Low** | Governance improvement, not direct risk |
+
+#### Unused Permission Evidence Gate
+
+Provider "last used" summaries are not enough by themselves to justify permission removal or role downscoping. Before reporting `IAM-PRIV-03` or recommending a permission reduction, capture enough evidence to prove the permission is truly unused for the business process and review window.
+
+| Evidence | Required Detail | Why It Matters |
+|---|---|---|
+| Principal | User, group, role, service account, managed identity, or workload identity being reviewed | Prevents broad findings that cannot be remediated safely |
+| Policy / role | Attached policy, role definition, group, entitlement, or custom role granting the permission | Shows where the downscope change must happen |
+| Permission / action | Specific action, verb, API permission, data action, or wildcard being removed | Avoids removing an entire role when one action is unused |
+| Resource scope | Account, subscription, project, folder, tenant, resource group, repository, or object scope | Distinguishes unused global access from valid scoped access |
+| Usage data source | AWS IAM Access Advisor/CloudTrail, Azure activity logs/PIM, GCP Recommender/audit logs, IdP logs, SIEM query, or application telemetry | Documents the authority and limitations of the last-used claim |
+| Last used / granularity | Timestamp or "not accessed" value plus whether granularity is service-level, action-level, resource-level, or role-level | Provider summaries may hide per-action use or only track coarse services |
+| Observation window | Lookback period, data retention period, and whether the window covers seasonal/batch operations | Prevents removing permissions used quarterly, annually, or during incidents |
+| Business owner | Owner confirmation, ticket, access review decision, or application team approval | Confirms low-frequency access is not required for planned work |
+| Secondary evidence | Corroborating logs, job schedules, break-glass runbooks, change tickets, or incident procedures | Reduces reliance on one incomplete provider signal |
+| Downscope confidence | High / Medium / Low with rationale and rollback or staged-removal plan | Makes remediation risk explicit before access is removed |
+
+**Decision rule:** Classify unused-permission findings as actionable only when the usage data source, observation window, owner confirmation, and secondary evidence support the same conclusion. If evidence is incomplete, report a review-required governance gap instead of directly recommending removal.
+
+**Provider evidence limitations to note:**
+
+- AWS service last accessed data can be service-level and may not prove every action is unused.
+- Azure role usage may require correlating activity logs, PIM activation history, sign-in logs, and resource provider operations.
+- GCP IAM Recommender and Policy Analyzer findings depend on available audit logs and may miss custom application authorization paths.
+- SIEM retention shorter than the business cycle weakens any unused-permission conclusion.
 
 ---
 
@@ -380,6 +406,7 @@ For each finding, produce a row with:
 | **Framework Ref** | NIST SP 800-63B section, NIST SP 800-207 tenet, or CIS Control ID |
 | **Affected Scope** | Accounts, roles, policies, or platforms impacted |
 | **Evidence** | Specific configuration, policy, or data supporting the finding |
+| **Usage Evidence** | For unused-permission findings: data source, last-used value, granularity, observation window, owner confirmation, secondary evidence, and confidence |
 | **Remediation** | Prioritized fix with implementation guidance |
 | **Effort** | Low (< 1 day) / Medium (1-5 days) / High (> 5 days) |
 
@@ -412,7 +439,14 @@ For each finding, produce a row with:
 - Zero Trust (Step 7): [count]
 
 ### Detailed Findings
+
 [Findings table — see above]
+
+### Unused Permission Evidence
+
+| Principal | Policy / Role | Permission / Action | Resource Scope | Usage Data Source | Last Used / Granularity | Observation Window | Business Owner | Secondary Evidence | Downscope Confidence |
+|---|---|---|---|---|---|---|---|---|---|
+| [role/service account/user] | [policy or entitlement] | [action] | [scope] | [Access Advisor / audit logs / SIEM / recommender] | [timestamp + granularity] | [lookback and retention] | [owner/ticket] | [logs/schedule/runbook] | [High/Medium/Low + rationale] |
 
 ### Remediation Roadmap
 [Prioritized actions: immediate (0-7 days), short-term (30 days), medium-term (90 days)]
@@ -446,6 +480,18 @@ For each finding, produce a row with:
 | `cloud/azure-review.md` | Azure/Entra ID-specific security configuration |
 | `cloud/gcp-review.md` | GCP-specific IAM and organization policy review |
 | `compliance/soc2-gap.md` | Mapping IAM findings to SOC 2 Trust Services Criteria (CC6.1-CC6.3) |
+
+---
+
+## Common Pitfalls
+
+1. **Treating provider last-used summaries as action-level truth.** Some services expose only service-level or coarse role-level activity. Confirm granularity before claiming a specific action is unused.
+
+2. **Using an observation window shorter than the business cycle.** Quarterly finance jobs, annual audits, disaster-recovery runbooks, and incident-response access can look unused in short retention windows.
+
+3. **Removing access without owner confirmation.** A technically unused permission can still be reserved for a documented break-glass, batch, or compliance process. Capture owner approval and a rollback path before downscoping.
+
+4. **Ignoring secondary evidence.** Corroborate recommender findings with audit logs, SIEM queries, job schedules, PIM activation history, or change tickets before treating downscope confidence as high.
 
 ---
 
@@ -508,4 +554,5 @@ This skill processes user-supplied content including IAM policies, access config
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.0.1 | 2026-06-11 | Added unused permission evidence requirements, output fields, and pitfalls for last-used granularity, observation windows, owner confirmation, secondary evidence, and downscope confidence |
 | 1.0.0 | 2025-03-06 | Initial release |
