@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [CIS-Controls-v8, NIST-SP-800-53-AC-6]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -167,6 +167,21 @@ PAM-TOOL-08: PAM connectors not configured for all target system types
 PAM-TOOL-09: PAM audit logs not tamper-protected (no forwarding to immutable store)
 PAM-TOOL-10: PAM tool not integrated with IdP for identity verification
 ```
+
+#### Direct PAM Bypass Reconciliation Gate
+
+PAM coverage reports are not sufficient evidence that privileged access is controlled. Reconcile PAM/JIT records against native platform logs to prove that privileged actions traverse the broker or have an approved emergency exception.
+
+| Evidence | Required Detail | Bypass Pattern Detected |
+|---|---|---|
+| PAM/JIT record | Session ID, approval, checkout, JIT activation, user, target, privileged role, start/end time | Privileged action with no matching broker record |
+| Native platform event | SSH/RDP login, cloud console sign-in, STS assume-role, database admin login, Kubernetes API event, local admin use | Direct access outside PAM/PIM |
+| Reconciliation window | Expected time delta between PAM approval/session and native privileged event | Late, missing, or replayed approvals |
+| Network path restriction | Bastion, session proxy, firewall, security group, conditional access, or private endpoint proving direct ports are closed | Parallel SSH/RDP/database path left reachable |
+| Emergency exception | Break-glass ticket, expiry, monitoring, post-use review, and credential rotation | Emergency access treated as normal PAM coverage |
+| SIEM correlation | Alert/query that flags privileged native events without matching PAM/JIT/emergency record | Bypass events silently accepted |
+
+**Decision rule:** Mark PAM coverage as `Not Evaluable from PAM console alone` unless native logs, network restrictions, and SIEM correlation prove privileged sessions are brokered or explicitly approved. Direct privileged native events without a matching PAM/JIT/emergency record should be reported as a PAM bypass finding.
 
 ---
 
@@ -366,6 +381,7 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 | **Framework Ref** | NIST SP 800-53 control ID and/or CIS Controls v8 sub-control |
 | **Affected Scope** | Accounts, systems, or platforms impacted |
 | **Evidence** | Specific data supporting the finding |
+| **PAM Reconciliation Evidence** | Matching PAM/JIT/emergency record, native platform event, reconciliation window, network path restriction, and SIEM correlation status |
 | **Remediation** | Prioritized fix with implementation guidance |
 | **Effort** | Low (< 1 day) / Medium (1-5 days) / High (> 5 days) |
 
@@ -391,6 +407,12 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 | JIT Access | [Not Present/Basic/Mature/Advanced] | [Target] |
 | Break-Glass | [Not Present/Basic/Mature/Advanced] | [Target] |
 | Analytics | [Not Present/Basic/Mature/Advanced] | [Target] |
+
+### PAM Bypass Reconciliation
+
+| Native Privileged Event | PAM / JIT / Emergency Record | Match Window | Network Path Control | SIEM Correlation | Decision |
+|---|---|---|---|---|---|
+| [SSH/RDP/cloud console/db/Kubernetes/local admin event] | [session/approval/checkout/ticket ID] | [within X minutes / no match] | [proxy/firewall/conditional access] | [alert/query name] | [brokered / emergency approved / bypass finding / not evaluable] |
 
 ### Findings by Severity
 - Critical: [count]
@@ -460,6 +482,14 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 
 ---
 
+### Direct Bypass Reconciliation Pitfalls
+
+9. **Accepting PAM coverage reports without native-log reconciliation** -- PAM can show high onboarding while administrators still use direct SSH, RDP, cloud console, database, Kubernetes, or local admin paths. Match native events to PAM/JIT/emergency records.
+10. **Leaving direct network paths open beside a broker** -- Session proxy controls do not enforce PAM if direct admin ports remain reachable from workstations, jump hosts, service accounts, or alternate IdPs.
+11. **Treating break-glass as a permanent bypass** -- Emergency access must have expiry, ticketing, monitoring, post-use review, and credential rotation. Unmatched privileged events should alert.
+
+---
+
 ## Prompt Injection Safety Notice
 
 ```
@@ -502,4 +532,5 @@ that may contain adversarial content.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.0.1 | 2026-06-11 | Added direct PAM bypass reconciliation gates comparing PAM/JIT/emergency records with native platform logs, network path restrictions, and SIEM correlation evidence |
 | 1.0.0 | 2025-03-06 | Initial release |
