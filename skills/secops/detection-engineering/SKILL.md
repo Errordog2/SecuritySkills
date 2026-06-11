@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16, Sigma, Palantir-ADS]
 difficulty: advanced
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -58,6 +58,8 @@ Before beginning, gather or confirm:
 - [ ] **Existing detection coverage:** Current rules, known gaps, previous false positive history for similar detections.
 - [ ] **Detection priority:** Is this for a known active threat, proactive coverage expansion, or compliance requirement?
 - [ ] **Organizational naming conventions:** Rule ID format, severity taxonomy, and tagging standards used by the detection engineering team.
+- [ ] **Field lineage evidence:** Source event fields, normalized fields, parser/enrichment transforms, schema owners, sample events, and backend field mappings for each key detection predicate.
+- [ ] **Suppression inventory:** Current filters, exceptions, allowlists, suppression owners, review cadence, expiry dates, population size, and change history.
 
 If the ATT&CK technique is provided but other context is missing, proceed with conservative assumptions (Windows enterprise environment, Sysmon + Windows Security logs available) and note assumptions in the output.
 
@@ -107,7 +109,48 @@ Before writing the rule, enumerate:
 - Evasion techniques an adversary might use to avoid the detection (known blind spots)
 - Tuning parameters that can reduce false positives without creating blind spots
 
-### Step 3: Author the Sigma Rule
+### Step 3: Field-Lineage and Suppression-Drift Evidence
+
+Validate the operational evidence behind the detection before marking a rule as high-quality, portable, or production-ready. Short, concise rules can be strong when the field pipeline is owned and stable; long rules can still be weak if parser drift, backend conversion, or exception growth hides the behavior.
+
+**Field-lineage requirements:**
+
+For each field used in selections, filters, correlations, thresholds, or alert context, capture:
+
+| Evidence | Required Detail | Example |
+|----------|-----------------|---------|
+| Source field | Raw event field and log source where the value originates | `winlog.event_data.CommandLine` from Windows Security 4688 |
+| Normalized field | Detection abstraction or SIEM schema field used by the rule | `process.command_line`, `ProcessCommandLine`, `CommandLine` |
+| Transform path | Parser, ingestion pipeline, enrichment, lookup, or field alias that maps source to normalized field | Sysmon parser v2026.05, ECS ingest pipeline, Splunk CIM alias |
+| Transform owner | Team or repository responsible for parser/schema changes | Detection Platform, `detections/parsers/windows.yml` |
+| Evidence sample | Redacted raw event and normalized event proving the mapping | Raw 4688 sample + normalized process event |
+| Quality signal | Null rate, parse failure rate, truncation risk, or last parser change date | `<1%` nulls over 30 days; command line not truncated |
+| Backend mapping | Equivalent field names for each target backend | Sentinel ASIM, Splunk CIM, Elastic ECS, Chronicle UDM |
+
+**Field-lineage gate:** Do not mark a detection `stable`, `Operational`, or `Robust` unless every key predicate field has a known source, transform owner, and representative sample event. If lineage is unknown, mark the rule `experimental` or coverage `Theoretical` and document the risk.
+
+**Backend portability checks:**
+
+1. Compare the Sigma field names against each intended backend conversion target.
+2. Confirm converted rules preserve the same logical predicate, case sensitivity, tokenization, null handling, and list matching semantics.
+3. Run or inspect fixture-backed conversions for at least one true-positive and one benign sample per backend when claiming multi-SIEM support.
+4. Record any backend-specific gaps as blind spots instead of silently treating all generated queries as equivalent.
+
+**Suppression and exception lifecycle review:**
+
+| Evidence | Required Detail | Risk if Missing |
+|----------|-----------------|-----------------|
+| Suppression target | User, host, service account, process, IP range, tenant, group, or business unit suppressed | Overbroad exception hides attacker behavior |
+| Reason and ticket | Business justification and approval reference | No accountability for alert loss |
+| Owner | Person or team responsible for revalidation | Exceptions persist after ownership changes |
+| Review interval | Next review date, expiry, or maximum age | Suppression drift becomes permanent blind spot |
+| Population size | Number of identities/assets/events covered now and at creation time | Group growth silently widens the blind spot |
+| Evidence metric | Fire-rate reduction, false-positive sample, or validation query supporting the exception | Filter may remove true positives |
+| Removal test | Condition that proves the exception can be retired safely | Legacy noise remains after root cause is fixed |
+
+**Suppression-drift gate:** If suppression scope grows, owner is unknown, review interval is missing, or the exception cannot be tied to a current false-positive sample, classify the detection as needing tuning review before deployment or before coverage is scored above `Tested`.
+
+### Step 4: Author the Sigma Rule
 
 Write the detection rule following the Sigma specification (sigmahq.io).
 
@@ -195,7 +238,7 @@ fields:
 | `|base64offset` | Base64 encoded value match | `CommandLine|base64offset|contains: 'IEX'` |
 | `condition` | Boolean logic | `selection_a and selection_b and not filter_main` |
 
-### Step 4: Build ADS Documentation
+### Step 5: Build ADS Documentation
 
 Document the detection using the Palantir Alerting and Detection Strategy (ADS) framework. ADS ensures every detection has operational context beyond the rule itself.
 
@@ -231,9 +274,11 @@ Document what this detection will NOT catch and what assumptions it relies on.
 
 - **Assumption:** PowerShell process creation events are being logged (Sysmon installed or advanced audit policy enabled for process creation with command-line logging).
 - **Assumption:** Command-line arguments are captured in full (not truncated by logging configuration).
+- **Assumption:** Source fields, normalized fields, and backend mappings used by the rule are owned, documented, and stable for the target SIEM.
 - **Blind spot:** PowerShell execution via the .NET System.Management.Automation namespace directly (no powershell.exe process).
 - **Blind spot:** Encoded commands invoked through WMI or scheduled tasks where the parent process is not filtered.
 - **Blind spot:** Use of alternative encoding or obfuscation that does not use the -EncodedCommand flag.
+- **Blind spot:** Parser, enrichment, or schema drift can break a predicate even when the Sigma rule text has not changed.
 
 #### False Positives
 List known sources of false positives and recommended tuning actions.
@@ -242,7 +287,7 @@ List known sources of false positives and recommended tuning actions.
 - IT automation scripts using encoded commands for safe transport of complex strings
 - Software packaging tools (Chocolatey, some MSI wrappers)
 
-**Tuning recommendation:** Add parent process exclusions for validated automation tools after confirming their encoded command usage is benign. Document each exclusion with a ticket reference.
+**Tuning recommendation:** Add parent process exclusions for validated automation tools after confirming their encoded command usage is benign. Document each exclusion with a ticket reference, owner, review interval, population size, and expiry or removal condition.
 
 #### Priority
 Define the alert priority and its justification.
@@ -258,6 +303,8 @@ Describe how to test that this detection works correctly.
 2. **True negative test:** Execute `powershell.exe -Command "Get-Process"` (no encoding). Verify no alert fires.
 3. **Filter validation:** If SCCM is in use, verify that SCCM client operations do not trigger the alert.
 4. **ATT&CK technique coverage:** Validate with atomic red team test `T1059.001` (https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1059.001/T1059.001.md).
+5. **Field-lineage validation:** Verify raw source events populate the normalized fields used by the rule in every target backend.
+6. **Suppression validation:** Re-run tests with active suppressions enabled and disabled to confirm exceptions do not hide the true-positive fixture.
 
 #### Response
 Define the analyst response procedure when this alert fires.
@@ -269,7 +316,7 @@ Define the analyst response procedure when this alert fires.
 5. **Determine disposition:** Classify as True Positive, Benign True Positive, or False Positive.
 6. **Escalate if TP:** If malicious, escalate to Tier 2/IR team with decoded command, parent process chain, and correlated events.
 
-### Step 5: Detection Coverage Heatmap Methodology
+### Step 6: Detection Coverage Heatmap Methodology
 
 Map detection coverage against the ATT&CK matrix to identify gaps.
 
@@ -282,6 +329,8 @@ Map detection coverage against the ATT&CK matrix to identify gaps.
 | **Tested** | Light Green | Rule has been validated with synthetic test data (e.g., Atomic Red Team) |
 | **Operational** | Green | Rule is deployed in production, has been tuned, and has generated actionable alerts |
 | **Robust** | Dark Green | Multiple complementary rules cover different procedure examples; rule has caught real-world activity |
+
+Coverage cannot be scored above `Theoretical` without field-lineage evidence for key predicates. Coverage cannot be scored above `Tested` when suppressions are stale, ownerless, unbounded, or broader than the true-positive validation data.
 
 **Heatmap construction process:**
 
@@ -302,7 +351,7 @@ Map detection coverage against the ATT&CK matrix to identify gaps.
 | Ease of detection | Medium | Some techniques have clear observable artifacts; prioritize those first |
 | Compliance requirements | Medium | Regulatory frameworks may mandate detection of specific techniques |
 
-### Step 6: Detection-as-Code Practices
+### Step 7: Detection-as-Code Practices
 
 Manage detection rules as code artifacts in version control.
 
@@ -339,11 +388,13 @@ detections/
 **CI/CD pipeline stages:**
 
 1. **Lint:** Validate Sigma YAML syntax and required fields
-2. **Test:** Run Sigma rule against known-good and known-bad sample logs
-3. **Convert:** Use `sigma-cli` to convert Sigma to target SIEM query language
-4. **Review:** Require peer review (pull request) before merge
-5. **Deploy:** Push converted rules to SIEM via API (Sentinel Analytics Rules API, Splunk REST API)
-6. **Monitor:** Track rule performance metrics (fire rate, TP rate, MTTD)
+2. **Lineage check:** Confirm key fields have source samples, normalized samples, transform owners, and backend mapping fixtures
+3. **Test:** Run Sigma rule against known-good and known-bad sample logs
+4. **Suppression check:** Validate exception files include owner, reason, review interval, expiry, and population-size guardrails
+5. **Convert:** Use `sigma-cli` to convert Sigma to target SIEM query language
+6. **Review:** Require peer review (pull request) before merge
+7. **Deploy:** Push converted rules to SIEM via API (Sentinel Analytics Rules API, Splunk REST API)
+8. **Monitor:** Track rule performance metrics (fire rate, TP rate, MTTD, suppression growth, parser error rate)
 
 ---
 
@@ -365,7 +416,7 @@ Produce detection engineering deliverables in this structure:
 ```markdown
 ## Detection Engineering Report: [ATT&CK Technique ID]
 **Date:** [YYYY-MM-DD]
-**Skill:** detection-engineering v1.0.0
+**Skill:** detection-engineering v1.0.1
 **Frameworks:** MITRE ATT&CK v16, Sigma, Palantir ADS
 
 ### ATT&CK Technique Summary
@@ -380,7 +431,22 @@ Produce detection engineering deliverables in this structure:
 [Full Sigma YAML rule]
 
 ### ADS Documentation
-[Complete ADS framework documentation per Step 4]
+[Complete ADS framework documentation per Step 5]
+
+### Field-Lineage Evidence
+| Rule Field | Source Field | Normalized Field | Transform / Parser Owner | Sample Evidence | Backend Mapping | Quality Signal |
+|------------|--------------|------------------|--------------------------|-----------------|-----------------|----------------|
+| [CommandLine] | [winlog.event_data.CommandLine] | [process.command_line] | [Windows parser owner/repo] | [raw + normalized event IDs] | [Sentinel/Splunk/Elastic/Chronicle fields] | [null rate, parser version, truncation risk] |
+
+### Backend Conversion Comparison
+| Backend | Converted Predicate | Field Mapping Confirmed? | Fixture Result | Known Gap |
+|---------|---------------------|--------------------------|----------------|-----------|
+| [Sentinel KQL] | [predicate summary] | [Yes/No] | [TP/FP fixture outcome] | [case sensitivity/null handling/list matching] |
+
+### Suppression Drift Review
+| Suppression Target | Reason / Ticket | Owner | Population Size / Delta | Review Interval / Expiry | Evidence Metric | Decision |
+|--------------------|-----------------|-------|--------------------------|--------------------------|-----------------|----------|
+| [service_account_group] | [FP reason + ticket] | [team/person] | [12 -> 43 members] | [quarterly / YYYY-MM-DD] | [fire-rate reduction + TP fixture still fires] | [keep / narrow / expire / remove] |
 
 ### Coverage Assessment
 | Level | Status |
@@ -388,6 +454,8 @@ Produce detection engineering deliverables in this structure:
 | Current Coverage | [None / Theoretical / Tested / Operational / Robust] |
 | Target Coverage | [Operational / Robust] |
 | Validation Method | [Atomic Red Team test ID / manual test procedure] |
+| Field-Lineage Status | [Complete / Partial / Unknown] |
+| Suppression Drift Status | [Reviewed / Stale / Ownerless / Not applicable] |
 
 ### Deployment Notes
 - **Target SIEM:** [Platform]
@@ -494,6 +562,14 @@ Detection rules are not write-once artifacts. Log sources change, environments e
 
 Overly broad or incorrect ATT&CK mappings undermine coverage analysis. A rule that detects a specific PowerShell obfuscation technique should map to T1059.001 (PowerShell) and potentially T1027 (Obfuscated Files or Information), not to the parent T1059 alone. Use sub-technique IDs when the detection is specific to a sub-technique. Validate mappings against the ATT&CK technique definition and procedure examples.
 
+### Pitfall 6: Treating Normalized Fields as Ground Truth
+
+Rules that reference normalized fields such as `process.command_line` can look portable while depending on parser behavior that is undocumented, stale, or different across backends. Always verify source-to-normalized field lineage, parser ownership, sample events, null rates, truncation risk, and backend field mappings before claiming production coverage.
+
+### Pitfall 7: Letting Suppressions Become Permanent Blind Spots
+
+Suppressions and allowlists reduce noise, but they can erase detection value when groups grow, owners leave, review dates pass, or original false-positive conditions disappear. Every suppression should have a target, reason, owner, ticket, review interval, population-size check, and removal condition. Stale or ownerless suppressions should block `Operational` or `Robust` coverage claims.
+
 ---
 
 ## 8. Prompt Injection Safety Notice
@@ -522,3 +598,13 @@ This skill processes user-supplied content that may include log samples, detecti
 10. **MITRE Cyber Analytics Repository (CAR)** -- https://car.mitre.org/
 11. **Detection Engineering Maturity Model** -- Kyle Bailey, https://kyle-bailey.medium.com/detection-engineering-maturity-matrix-f4f3181a5cc7
 12. **Sigma Rule Creation Guide (SigmaHQ)** -- https://sigmahq.io/docs/guide/rules.html
+
+---
+
+## 10. Changelog
+
+### v1.0.1
+
+- Added field-lineage validation for source fields, normalized fields, transform ownership, sample evidence, and backend mappings.
+- Added suppression-drift gates for owner, reason, review cadence, expiry, population growth, and removal conditions.
+- Expanded the output report with field-lineage, backend conversion, and suppression lifecycle evidence tables.
