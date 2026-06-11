@@ -13,7 +13,7 @@ phase: [respond]
 frameworks: [NIST-SP-800-86, RFC-3227]
 difficulty: advanced
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -55,12 +55,15 @@ Before beginning evidence collection, gather or confirm:
 - [ ] **Incident ID and severity** -- Reference to the associated incident response case.
 - [ ] **Affected systems** -- Hostnames, IP addresses, OS type/version, physical/virtual/cloud, hypervisor type if virtual.
 - [ ] **Current system state** -- Powered on (running), powered off, suspended (VM), or unknown.
+- [ ] **Workload persistence model** -- Persistent host/VM, stateful container, immutable container, serverless function, or managed service.
 - [ ] **Legal hold status** -- Has legal counsel issued a preservation directive? Are there litigation or regulatory holds in effect?
 - [ ] **Authorization** -- Written authorization from system owner or legal authority to perform forensic acquisition.
 - [ ] **Evidence storage** -- Write-protected storage media available (forensic drives, NAS, S3 bucket with object lock).
+- [ ] **Evidence-store custody controls** -- Immutability/object lock, access logging, retention policy, post-upload hash verification, and access reviewer.
 - [ ] **Forensic tools available** -- Memory capture (WinPmem, LiME, DumpIt), disk imaging (dc3dd, FTK Imager, ewfacquire), network capture (tcpdump, Wireshark).
 - [ ] **Cloud provider access** -- IAM permissions for snapshot creation, log export, and API access (if cloud environment).
 - [ ] **Time synchronization** -- NTP configuration of affected systems; UTC timestamps preferred.
+- [ ] **Timeline normalization evidence** -- Source timezone, clock drift, NTP status, collection-time reference clock, and normalized UTC mapping for each log source.
 - [ ] **Encryption status** -- BitLocker, LUKS, FileVault, or cloud-managed encryption on affected volumes.
 
 ---
@@ -114,6 +117,20 @@ RFC 3227 Section 2.1 defines the order of volatility -- evidence sources ranked 
 | 5 | **Remote logging and monitoring data** | Persistent until rotation | Subject to log rotation policies | SIEM export, CloudTrail, syslog server, ELK/Splunk |
 | 6 | **Physical configuration, network topology** | Stable | Changes with infrastructure modifications | Network diagrams, switch/router configs, CMDB |
 | 7 | **Archival media** | Long-term | Stable unless damaged or degaussed | Tape backups, offline backups, cold storage |
+
+#### Workload Persistence and Acquisition Strategy Gate
+
+Not every workload requires full disk imaging. Choose the acquisition path based on whether the workload has persistent local state, synchronized remote logs, and volatile evidence that will disappear during containment.
+
+| Workload Type | Required Evidence | Acquisition Decision |
+|---|---|---|
+| Persistent host or VM | Disk/volume identity, memory state, local logs, encryption status, and snapshot/image feasibility | Capture volatile state first, then image or snapshot persistent storage |
+| Stateful container | Container ID, writable layer, mounted volumes, orchestrator metadata, and node/runtime logs | Preserve container metadata, mounted volumes, logs, and relevant node state |
+| Immutable container | Image digest, deployment manifest, pod/task events, synchronized central logs, and proof of no persistent writable volume | Disk imaging may be `N/A`; preserve logs, orchestrator metadata, image digest, and volatile process/network state if still running |
+| Serverless or managed service | Invocation logs, configuration/version, IAM bindings, provider audit logs, and deployment artifact hash | No local disk image exists; preserve provider logs, configs, and artifacts |
+| Remote-only evidence | SIEM/export source, retention window, export hash, and source access logs | Treat remote logs as primary evidence and document why host imaging is not applicable |
+
+**Decision rule:** Mark disk imaging as `Not Applicable - Ephemeral` only when remote logs are synchronized, no persistent writable storage is in scope, image/deployment identity is recorded, and the evidence gap is documented. Otherwise record why imaging, snapshotting, or volume preservation was skipped.
 
 ### Step 3: Volatile Data Capture
 
@@ -289,6 +306,20 @@ Preserve logs before rotation policies destroy them. Export and hash logs from e
 4. Store alongside disk and memory evidence in the case folder
 ```
 
+#### Timeline Normalization and Clock-Skew Gate
+
+Before drawing timeline conclusions, normalize timestamps across log sources and record the uncertainty introduced by drift, timezone differences, and ingestion delay.
+
+| Evidence | Required Detail | Timeline Risk Detected |
+|---|---|---|
+| Source timezone | Original timezone, UTC offset, daylight-saving status, and timestamp format for each source | Local-time logs are compared directly with UTC logs |
+| Clock drift | NTP status, measured drift in seconds, reference clock, and measurement time | Events appear out of order because system clocks differ |
+| Collection timestamp | Collector workstation time, timezone, and clock source | Evidence collection time cannot be trusted |
+| Ingestion delay | Difference between event time and SIEM/provider ingest time where available | Late-arriving logs are mistaken for later attacker action |
+| Normalized mapping | Original timestamp, normalized UTC timestamp, applied offset/drift correction, and confidence | Timeline conclusions omit the correction method |
+
+**Decision rule:** Mark timeline findings as `Timeline Not Evaluable` until each material log source has timezone, drift, and normalization evidence. If drift exceeds the incident timeline granularity, report the uncertainty window instead of asserting exact event order.
+
 ### Step 6: Cloud Forensics
 
 Cloud environments require different acquisition techniques because direct hardware access is not available.
@@ -339,6 +370,21 @@ gcloud logging read 'timestamp>="YYYY-MM-DDT00:00:00Z" AND timestamp<="YYYY-MM-D
 - Multi-region deployments require evidence collection across all regions
 - Serverless environments (Lambda, Cloud Functions) produce only invocation logs -- there is no disk to image
 
+#### Cloud Evidence Store Custody Gate
+
+Cloud storage is not automatically forensically sound. Treat the evidence bucket, container, or object store as part of the evidence system and verify custody controls.
+
+| Evidence | Required Detail | Custody Gap Detected |
+|---|---|---|
+| Immutability | S3 Object Lock, Azure immutable blob policy, GCS retention lock, legal hold, or WORM storage setting | Evidence can be overwritten or deleted after upload |
+| Access logging | Bucket/container access logs, cloud audit events, and log retention location | Evidence access cannot be reconstructed |
+| Post-upload hash | SHA-256 computed before upload and verified after upload/download | Artifact changed during transfer or storage |
+| Encryption and key custody | KMS key, key policy, rotation, and who can decrypt evidence | Unauthorized parties can read or alter evidence |
+| Retention and deletion policy | Retention period, legal hold status, lifecycle rules, and delete permissions | Lifecycle policy removes evidence during the case |
+| Access review | Named custodians, least-privilege access, break-glass path, and reviewer | Broad admin access weakens chain of custody |
+
+**Decision rule:** Mark cloud artifacts as `Custody Controlled` only when immutability, access logging, post-upload hash verification, retention, encryption/key custody, and access review are documented. Otherwise report `Cloud Custody Gap` with the missing controls.
+
 ---
 
 ## 4. Findings Classification
@@ -360,7 +406,7 @@ Produce the evidence collection report with these exact sections:
 ```markdown
 ## Forensic Evidence Collection Report: [Incident ID]
 **Date:** [YYYY-MM-DD]
-**Skill:** forensics-checklist v1.0.0
+**Skill:** forensics-checklist v1.0.1
 **Frameworks:** NIST SP 800-86, RFC 3227
 **Examiner:** [Name or "AI-assisted -- human examiner required for court-admissible evidence"]
 
@@ -386,6 +432,11 @@ the order of collection, and any evidence that could not be obtained.]
 | 6 | Physical configuration | [Yes/No] | [Notes] |
 | 7 | Archival media | [Yes/No/N/A] | [Notes] |
 
+### Workload Acquisition Decision
+| Source System | Workload Type | Persistent Storage | Remote Logs Synchronized | Image/Snapshot Decision | Evidence Gap |
+|---|---|---|---|---|---|
+| [hostname/resource] | [persistent host / stateful container / immutable container / serverless] | [Yes/No/N/A] | [Yes/No] | [image / snapshot / targeted logs / Not Applicable - Ephemeral] | [gap and rationale] |
+
 ### Chain of Custody
 [Include chain of custody form for each evidence item]
 
@@ -397,10 +448,15 @@ the order of collection, and any evidence that could not be obtained.]
 ### Evidence Gaps
 [List any evidence that could not be collected and the reason]
 
+### Timeline Normalization
+| Source | Original Timezone | NTP / Drift Evidence | Ingest Delay | UTC Normalization | Confidence |
+|---|---|---|---|---|---|
+| [log/source] | [timezone/offset] | [NTP status, drift seconds] | [duration/N/A] | [mapping method] | [high/medium/low/Timeline Not Evaluable] |
+
 ### Cloud Evidence (if applicable)
-| Cloud Provider | Resource | Evidence Type | Collected | Notes |
-|---|---|---|---|---|
-| [AWS/Azure/GCP] | [Resource ID] | [Snapshot/Logs/Config] | [Yes/No] | [Notes] |
+| Cloud Provider | Resource | Evidence Type | Collected | Immutability | Access Logging | Post-Upload Hash | Custody Decision | Notes |
+|---|---|---|---|---|---|---|---|---|
+| [AWS/Azure/GCP] | [Resource ID] | [Snapshot/Logs/Config] | [Yes/No] | [Object Lock/retention/legal hold] | [enabled/disabled] | [verified/missing] | [Custody Controlled / Cloud Custody Gap] | [Notes] |
 ```
 
 ---
@@ -461,9 +517,30 @@ Applying traditional forensic methods to cloud environments without adaptation l
 
 Every action on a live system modifies it -- writing memory dump files to the evidence drive changes timestamps and consumes disk space, running commands updates shell history and modifies access times. Minimize evidence contamination by writing collection output to external media (USB, network share, S3 bucket), documenting every command executed on the system, and noting the expected impact of each collection action on the evidence state.
 
+### Pitfall 6: Imaging Ephemeral Workloads Without a Persistence Decision
+
+Immutable containers, serverless functions, and managed services may have no persistent disk to image. Forcing image-first guidance can waste time and miss better evidence such as orchestrator events, image digests, deployment manifests, synchronized logs, and provider audit records. Document why imaging is not applicable before skipping it.
+
+### Pitfall 7: Building Timelines Without Clock-Skew Normalization
+
+Mixed timezones, disabled NTP, clock drift, and SIEM ingestion delay can invert event order. Record original timestamps, UTC normalization, drift measurements, and uncertainty windows before making timeline claims.
+
+### Pitfall 8: Treating Cloud Upload as Chain of Custody
+
+Uploading artifacts to a bucket is not custody by itself. Evidence stores need immutability, access logging, post-upload hash verification, retention controls, encryption/key custody, and access review.
+
 ---
 
-## 8. Prompt Injection Safety Notice
+## 8. Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0.1 | 2026-06-11 | Added workload persistence, timeline normalization, and cloud evidence custody gates |
+| 1.0.0 | 2025-03-06 | Initial release |
+
+---
+
+## 9. Prompt Injection Safety Notice
 
 This skill processes forensic artifacts, log files, memory dumps, and system configuration data that may contain attacker-planted content. The agent must adhere to the following constraints:
 
@@ -475,7 +552,7 @@ This skill processes forensic artifacts, log files, memory dumps, and system con
 
 ---
 
-## 9. References
+## 10. References
 
 1. **NIST SP 800-86** -- Guide to Integrating Forensic Techniques into Incident Response -- https://csrc.nist.gov/publications/detail/sp/800-86/final
 2. **RFC 3227** -- Guidelines for Evidence Collection and Archiving -- https://www.rfc-editor.org/rfc/rfc3227
