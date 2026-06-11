@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [CIS-Azure-v2.1.0]
 difficulty: intermediate
 time_estimate: "60-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -54,6 +54,9 @@ The CIS Microsoft Azure Foundations Benchmark v2.1.0 is a consensus-driven secur
 - Entra ID (Azure AD) configuration files or policy documents
 - NSG and firewall rule definitions
 - Key Vault access policies and RBAC assignments
+- Management group hierarchy, Azure Policy assignments/exemptions, initiative assignments, and Defender for Cloud inheritance evidence
+- PIM exports for eligible and active Microsoft Entra roles, Azure RBAC roles, activation settings, approvals, maximum duration, MFA, and justification requirements
+- Storage account network rules, private endpoint configuration, `allowSharedKeyAccess`, account-key access, SAS inventory, SAS expiry, and data-plane access logs where available
 
 ---
 
@@ -88,10 +91,75 @@ For detailed CIS benchmark checklist items with specific Terraform patterns, Bic
 
 ---
 
+### Step 11: Effective Inheritance, PIM, and Storage Data-Plane Evidence
+
+Before compiling the final report, reconcile subscription-local settings with inherited management-group controls, temporary exemptions, effective privilege, and storage data-plane access. Do not mark a control pass or fail from a subscription-local artifact alone when the effective posture depends on inherited Azure Policy, Defender for Cloud plans, PIM activation controls, or Storage shared-key/SAS paths.
+
+#### 11.1 Management Group Inheritance and Exemption Gate
+
+Record the inherited governance context for each subscription or resource group in scope:
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Management group path | Tenant ID if available, management group hierarchy, subscription ID, and retrieval timestamp |
+| Policy/initiative assignment | Assignment scope, definition/initiative name, parameters, effect, enforcement mode, and assigned identity |
+| Defender plan inheritance | Resource type, subscription-local setting, inherited assignment or policy, and effective plan status |
+| Exemptions and notScopes | Exemption name, category, scope, owner, expiry date, evidence link, and residual risk |
+| Effective decision | Inherited pass, local pass, inherited deny/modify, exempted, failed, or Not Evaluable |
+
+Rules:
+- Treat inherited management-group policy as risk-reducing only when assignment scope, effect, parameters, and current compliance/evaluation evidence are documented.
+- Do not fail a subscription-local setting when an enforced inherited policy prevents the insecure runtime state, unless a valid exemption, notScope, or unsupported resource-provider path bypasses it.
+- Do not pass a control solely from an inherited assignment when an exemption, disabled enforcement mode, policy assignment failure, or stale compliance result leaves the resource uncovered.
+- Mark as Not Evaluable when only portal screenshots or policy names are available without assignment scope, effect, parameter, exemption, and evaluation timestamp evidence.
+
+#### 11.2 PIM Effective Privilege Gate
+
+Evaluate standing assignments and eligible privilege together:
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Standing roles | Principal, scope, role definition, inherited path, assignment time, and owner |
+| Eligible roles | PIM role, scope, eligibility window, activation requirement, and maximum duration |
+| Activation controls | MFA, approval, justification, ticket, conditional access, and alerting requirements |
+| Last use / activation history | Last activation time, approver, duration used, action performed, and review timestamp |
+| Effective privilege result | Standing admin, eligible admin with strong activation, eligible admin with weak activation, read-only, bounded service principal, or Not Evaluable |
+
+Finding triggers:
+- Principal has Owner, User Access Administrator, Privileged Role Administrator, or equivalent eligibility with no approval, no MFA, excessive duration, or no activation history review.
+- Permanent Reader evidence is used to dismiss a principal that is also PIM-eligible for privileged Azure RBAC or Entra roles.
+- Group-based PIM grants privileged membership/ownership but the group controls Azure roles, Entra roles, Key Vault, SQL, Intune, or application roles without activation and owner evidence.
+- Service principals, managed identities, or automation accounts have privileged actions but are excluded from PIM/JIT review without compensating approval, boundary, or workload-identity evidence.
+
+False-positive guardrails:
+- Do not report Reader, Billing Reader, Security Reader, or monitoring-only roles as privileged solely by name when effective permissions and activity evidence show no write, secret, identity, or control-plane reach.
+- Do not treat PIM eligibility as equivalent to standing access when MFA, approval, justification, short maximum duration, alerting, and recent access review evidence are present.
+
+#### 11.3 Storage SAS, Shared-Key, and Private Endpoint Data-Plane Gate
+
+Private endpoints and disabled public network access reduce network exposure, but they do not by themselves prove data-plane least privilege. Review Storage authorization paths separately:
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Network posture | Public network access, firewall rules, private endpoints, DNS zone linkage, bypass settings, and trusted-service exceptions |
+| Shared key posture | `allowSharedKeyAccess`, key rotation date, account-key access holders, logging, and break-glass owner |
+| SAS inventory | SAS type, issuer, signed permissions, resource scope, expiry, IP/protocol restrictions, stored access policy, and distribution channel |
+| Data-plane RBAC | Azure RBAC roles, Entra authorization path, user delegation SAS feasibility, and least-privilege proof |
+| Effective data access | Private-network only, Entra-authorized, shared-key enabled, long-lived SAS, broad account SAS, public bypass, or Not Evaluable |
+
+Finding triggers:
+- Storage account has private endpoints but shared-key access remains enabled with broad account-key access or no key rotation/review evidence.
+- SAS tokens are long-lived, account-scoped, write/delete/list-capable, missing IP/protocol limits, or not tied to a stored access policy/owner.
+- Review passes storage data exposure because public network access is disabled while shared keys, SAS, trusted-service bypass, or private endpoint DNS paths still allow unintended data-plane access.
+- Customer-managed key or private endpoint evidence is used to dismiss missing RBAC, SAS, or shared-key controls.
+
+False-positive guardrails:
+- Do not report a private endpoint as weak merely because public DNS names exist; verify route, private DNS, firewall, and client path evidence.
+- Do not report SAS usage by itself when the token is user-delegation based, short-lived, least-privilege, HTTPS-only, IP-restricted, owned, logged, and revocable.
 
 ---
 
-### Step 11: Compile Assessment Report
+### Step 12: Compile Assessment Report
 
 Produce the final report using the structure defined in the Output Format section.
 
@@ -119,6 +187,8 @@ Produce the final report using the structure defined in the Output Format sectio
 - Date: <assessment date>
 - Framework: CIS Microsoft Azure Foundations Benchmark v2.1.0
 - Files reviewed: <list of IaC files>
+- Management group / subscription scope: <hierarchy or Not Evaluable>
+- Effective evidence cutoff: <timestamp/source>
 
 ### Executive Summary
 - Total CIS recommendations evaluated: <N>
@@ -152,7 +222,28 @@ Produce the final report using the structure defined in the Output Format sectio
 - **Line(s):** <line numbers if applicable>
 - **Description:** <what was found>
 - **Evidence:** <specific configuration or code snippet>
+- **Inheritance Context:** <management-group policy / local subscription / exemption / notScope / Not Evaluable>
+- **PIM Context:** <standing role / eligible role / activation controls / last-use evidence when relevant>
+- **Storage Data-Plane Context:** <private endpoint / shared key / SAS / data-plane RBAC impact when relevant>
 - **Remediation:** <specific fix with code example>
+
+### Management Group Inheritance and Exemptions
+
+| Scope | Control/Policy | Local Setting | Inherited Assignment | Exemption/notScope | Effective Result | Evidence Timestamp |
+|-------|----------------|---------------|----------------------|--------------------|------------------|--------------------|
+| <mg/sub/resource> | <control> | <state> | <assignment/effect> | <none/exemption> | <pass/fail/not evaluable> | <timestamp> |
+
+### PIM Effective Privilege Review
+
+| Principal | Scope | Standing Role | Eligible Role | Activation Controls | Last Activation/Use | Effective Risk |
+|-----------|-------|---------------|---------------|---------------------|---------------------|----------------|
+| <principal> | <scope> | <role/none> | <role/none> | <MFA/approval/duration> | <timestamp/none> | <status> |
+
+### Storage Data-Plane Authorization Review
+
+| Storage Account | Network Path | Shared Key State | SAS Scope/Expiry | Data-Plane RBAC | Trusted-Service Bypass | Effective Exposure |
+|-----------------|--------------|------------------|------------------|-----------------|------------------------|--------------------|
+| <account> | <public/private/both> | <enabled/disabled> | <scope/expiry> | <roles> | <yes/no> | <status> |
 
 ### Prioritized Remediation Plan
 
@@ -200,6 +291,9 @@ Produce the final report using the structure defined in the Output Format sectio
 4. **NSG rules using service tags.** A rule with `source_address_prefix = "Internet"` is equivalent to `0.0.0.0/0`. Both must be flagged for CIS 6.1 and 6.2.
 5. **Key Vault purge protection is irreversible.** CIS 8.5 requires `purge_protection_enabled = true`. Note this cannot be disabled once enabled -- flag this for awareness during remediation.
 6. **App Service TLS version on both Linux and Windows.** Check `azurerm_linux_web_app` and `azurerm_windows_web_app` resources separately.
+7. **Treating subscription-local settings as the effective state.** Management group policy, Defender assignments, exemptions, `notScopes`, and disabled enforcement mode can change the real outcome. Record inherited controls and exceptions before scoring.
+8. **Ignoring PIM-eligible privilege.** A user or group can appear read-only in standing assignments while still being eligible for Owner, User Access Administrator, or Privileged Role Administrator. Review activation controls and last-use evidence.
+9. **Assuming private endpoints solve Storage authorization.** Private endpoints restrict network paths, but shared keys and SAS tokens are data-plane authorization mechanisms. Review `allowSharedKeyAccess`, account keys, SAS scope/expiry, and RBAC separately.
 
 ---
 
@@ -222,7 +316,15 @@ Produce the final report using the structure defined in the Output Format sectio
 - CIS Microsoft Azure Foundations Benchmark v2.1.0: https://www.cisecurity.org/benchmark/azure
 - Microsoft Defender for Cloud Documentation: https://learn.microsoft.com/en-us/azure/defender-for-cloud/
 - Microsoft Entra ID Security: https://learn.microsoft.com/en-us/entra/identity/
+- Azure management groups: https://learn.microsoft.com/en-us/azure/governance/management-groups/overview
+- Azure Policy overview: https://learn.microsoft.com/en-us/azure/governance/policy/overview
+- Azure Policy exemptions: https://learn.microsoft.com/en-us/azure/governance/policy/concepts/exemption-structure
+- Microsoft Entra Privileged Identity Management: https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure
+- Eligible and time-bound role assignments in Azure RBAC: https://learn.microsoft.com/en-us/azure/role-based-access-control/pim-integration
 - Azure Storage Security: https://learn.microsoft.com/en-us/azure/storage/common/storage-security-guide
+- Azure Storage shared access signatures: https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview
+- Azure Storage account access keys: https://learn.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
+- Azure Storage private endpoints: https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints
 - Azure Key Vault Best Practices: https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices
 - Azure App Service Security: https://learn.microsoft.com/en-us/azure/app-service/overview-security
 - Terraform AzureRM Provider Documentation: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
@@ -231,4 +333,5 @@ Produce the final report using the structure defined in the Output Format sectio
 
 ## Changelog
 
+- **1.0.1** -- Adds management group inheritance, Azure Policy exemption, PIM effective privilege, and Storage shared-key/SAS data-plane evidence gates.
 - **1.0.0** -- Initial release. Full coverage of CIS Microsoft Azure Foundations Benchmark v2.1.0 sections 1 through 9.
