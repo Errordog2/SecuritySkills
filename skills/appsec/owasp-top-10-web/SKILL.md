@@ -12,7 +12,7 @@ phase: [build, review]
 frameworks: [OWASP-Top-10-2021]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -68,6 +68,20 @@ Before including any finding in the report, apply the following verification gat
    - An `exec()` call on a hardcoded string with no user input is NOT command injection.
 4. **One finding per distinct vulnerability.** Do not report multiple findings for the same underlying vulnerability pattern appearing in related code paths. Consolidate variants (e.g., two SQL injection points in the same query builder) into a single finding with multiple locations noted.
 5. **Match findings to ground-truth severity.** Only report findings at severity levels proportional to actual exploitable impact. Infrastructure-level observations (missing headers, missing tooling, general architectural gaps) that lack a specific exploitable code path should be omitted or downgraded to Informational.
+
+**Endpoint Exposure Classification Gate:**
+
+Before assigning Broken Access Control, Injection, or SSRF findings to public routes, classify each endpoint by method, state change, data sensitivity, and trust-boundary crossing.
+
+| Endpoint Type | Examples | Default Finding Treatment |
+|---------------|----------|---------------------------|
+| Passive public read-only | `GET /health`, `GET /version`, `GET /status` returning non-sensitive metadata | Do not flag as A01/A03/A10 unless it leaks sensitive data, changes state, expands attack surface, or feeds another sink |
+| Public read with sensitive output | unauthenticated profile, invoice, debug, config, or feature-flag endpoint | Review for A01 exposure, A05 misconfiguration, or A09 logging gaps |
+| Mutating public endpoint | unauthenticated `POST`, `PUT`, `PATCH`, `DELETE`, GraphQL mutation, upload, export, or job trigger | Review for A01/A04/A08 and CSRF/idempotency/rate-limit controls |
+| Callback or webhook dispatch | user-supplied callback URL, export destination, webhook registration, async job notification | Review as trust-boundary crossing and potential A10 SSRF/confused-deputy issue |
+| Transformation pipeline | markdown-to-HTML, rich text, PDF generation, template rendering, document conversion | Review final render sink and sanitizer policy, not only initial input validation |
+
+Public observability endpoints are acceptable when they are read-only, deterministic, non-sensitive, rate-limited where appropriate, and excluded from downstream mutation or callback flows. Record that classification instead of filing a false positive.
 
 ---
 
@@ -191,6 +205,7 @@ http:\/\/.*api|http:\/\/.*login|secure\s*:\s*false
 - LDAP queries built from user input without escaping.
 - XPath/XML queries constructed with concatenation.
 - Template injection — user input rendered directly into server-side templates (Jinja2, Thymeleaf, ERB, Twig).
+- Transformation-layer XSS where markdown, rich text, template, PDF, or HTML conversion reintroduces executable output after initial validation.
 - NoSQL injection via query operator injection (`$gt`, `$ne`, `$regex` in MongoDB).
 - Header injection — user input placed into HTTP response headers without sanitization.
 
@@ -220,6 +235,8 @@ execute\(.*%s|execute\(.*\+|query\(.*\+|\.raw\(|\.rawQuery\(|\$\{.*\}.*SELECT|\.
 exec\(|system\(|popen\(|child_process|shell=True|Runtime\.getRuntime\(\)\.exec
 # XSS / template injection
 innerHTML|\.html\(|dangerouslySetInnerHTML|v-html|\|safe|\|raw|render_template_string
+# Markdown/rich-text conversion and sanitizer bypass
+markdown|marked\(|remark|rehype|sanitize-html|DOMPurify|bleach|allowTags|allowAttributes
 # NoSQL injection
 \$where|\$gt|\$ne|\$regex.*req\.|find\(.*req\.
 # Header injection
@@ -232,8 +249,11 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 - Use ORM methods properly; avoid raw query escape hatches unless inputs are strictly validated and parameterized.
 - For OS commands, use array-based APIs (e.g., `subprocess.run([...])` without `shell=True`); validate and allowlist expected argument values.
 - Apply context-aware output encoding for XSS: HTML-encode for HTML body, attribute-encode for attributes, JS-encode for script contexts. Use frameworks' built-in auto-escaping.
+- Validate transformation pipelines end-to-end: input validation, parser options, sanitizer allowlist, URL protocol handling, inline event attributes, iframe/script handling, and final render context.
 - Validate and sanitize all input on the server side; use allowlists over denylists.
 - Set `Content-Security-Policy` headers to mitigate XSS impact.
+
+**Transformation sink review gate:** Do not clear markdown-to-HTML, rich text, PDF, email-template, or document-conversion flows based only on upstream validation. Inspect the final rendered sink and verify the sanitizer strips inline event handlers, scriptable URLs (`javascript:`, `data:` where unsafe), dangerous tags, template delimiters, and framework-specific escape bypasses.
 
 ---
 
@@ -559,6 +579,7 @@ log.*req\.body|log.*request\.getParameter|logger\.info\(.*\+.*req
 - Any endpoint that accepts a URL or hostname from user input and makes a server-side HTTP request.
 - URL parameters like `url=`, `dest=`, `redirect=`, `uri=`, `path=`, `src=`, `callback=` that feed into backend HTTP clients.
 - Webhook registration features where the callback URL is user-controlled.
+- Async export, job completion, webhook relay, or notification flows that call back to a user-controlled destination after the original request completes.
 - PDF generators, image resizers, link previewers, or import-from-URL features.
 - Lack of allowlist validation on destination URLs (scheme, host, port, path).
 - No blocking of requests to private/reserved IP ranges (127.0.0.0/8, 10.0.0.0/8, 169.254.169.254, 172.16.0.0/12, 192.168.0.0/16, fd00::/8).
@@ -577,6 +598,8 @@ log.*req\.body|log.*request\.getParameter|logger\.info\(.*\+.*req
 requests\.get\(|requests\.post\(|urllib\.request|http\.get\(|fetch\(|axios\(|HttpClient|WebClient|curl_exec
 # URL parameters
 url=|dest=|redirect=|uri=|callback=|src=.*http
+# Callback/webhook/export destinations
+callback_url|webhook_url|return_url|notify_url|export_url|destination_url|callbackUrl|webhookUrl
 # Cloud metadata (hardcoded blocking check)
 169\.254\.169\.254|metadata\.google|metadata\.azure
 ```
@@ -590,6 +613,8 @@ url=|dest=|redirect=|uri=|callback=|src=.*http
 - Deploy network-level segmentation so the application server cannot reach internal services it does not need.
 - For webhook features, validate callback URLs at registration time and again at invocation time (DNS rebinding defense).
 
+**Callback and webhook trust-boundary gate:** Treat callback URLs, export destinations, webhook targets, and async notification URLs as server-side request sinks even when the initial endpoint only enqueues a job. Verify host allowlists, DNS rebinding defenses, redirect handling, private-IP blocking, authentication of callback registration, per-tenant ownership, and outbound network egress restrictions before clearing the flow.
+
 ---
 
 ### Step 3 — Findings Verification and Classification
@@ -601,6 +626,9 @@ Before finalizing findings, apply this verification checklist to each candidate 
 - [ ] **User input reaches the sink** — for injection findings, you traced that user-controlled input flows into the vulnerable function without adequate sanitization.
 - [ ] **No compensating control** — you checked for middleware, wrappers, or framework-level protections that neutralize the vulnerability.
 - [ ] **Not a test or example** — the code is production code, not a test fixture, documentation example, or intentionally vulnerable training sample.
+- [ ] **Endpoint impact classified** — public endpoints are separated into passive read-only, sensitive read, mutating, callback/webhook, and transformation-pipeline surfaces.
+- [ ] **Callback trust boundary checked** — user-supplied callback/export/webhook destinations were traced to their asynchronous invocation point and outbound network controls.
+- [ ] **Transformation sink checked** — markdown/rich-text/template conversion was reviewed at the final rendered sink and sanitizer policy, not only at input validation.
 
 **Discard any finding that fails two or more checklist items.** Findings that fail one item should be downgraded to Informational.
 
@@ -626,6 +654,13 @@ Present findings in this structure:
 **Review Date:** [date]
 **Scope:** [files/modules reviewed]
 
+### Endpoint Exposure Classification
+
+| Endpoint | Method | Auth | State Change? | Sensitive Output? | Trust Boundary / Sink | Decision |
+|----------|--------|------|---------------|-------------------|-----------------------|----------|
+| `/health` | GET | Public | No | No | None | Passive public read-only; no finding |
+| `/exports/callback` | POST | API key | Yes | N/A | User-supplied callback URL | Review A10 callback trust boundary |
+
 ### Findings
 
 #### [SEVERITY] — [Short Title]
@@ -635,10 +670,19 @@ Present findings in this structure:
 - **Location:** [file:line or file:function]
 - **Description:** [Clear explanation of the vulnerability, including how it could be exploited]
 - **Evidence:** [Code snippet or configuration excerpt]
+- **Endpoint Classification:** [passive read-only / sensitive read / mutating / callback-webhook / transformation sink]
+- **Trust Boundary Evidence:** [authorization, callback destination, sanitizer, outbound egress, or transformation sink evidence]
 - **Remediation:** [Specific, actionable fix with code example where applicable]
 - **Verification:** [How to confirm the fix is effective]
 
 ---
+
+### Callback and Transformation Review
+
+| Flow | User-Controlled Input | Sink / Invocation Point | Control Evidence | Result |
+|------|-----------------------|-------------------------|------------------|--------|
+| [export callback] | [callback_url] | [async worker HTTP client] | [host allowlist + private IP block] | [clear/finding] |
+| [markdown preview] | [markdown body] | [HTML render sink] | [sanitizer policy + CSP] | [clear/finding] |
 
 ### Summary Table
 
@@ -686,6 +730,17 @@ Present findings in this structure:
 4. **Reporting deprecated algorithms without context.** MD5 used for non-security checksums (e.g., cache busting, ETags) is not a cryptographic failure. Only flag weak algorithms when they protect sensitive data, passwords, or integrity-critical operations. State the security impact clearly.
 
 5. **Ignoring transitive dependencies.** A project may have zero direct vulnerable dependencies but inherit critical CVEs through transitive dependencies. Always analyze the full dependency tree, not just top-level declarations.
+
+6. **Flagging passive public endpoints as access-control vulnerabilities.** Public `GET /health`, `/status`, and `/version` routes are not automatically A01 findings when they are read-only and disclose only non-sensitive metadata. Classify endpoint impact before reporting.
+
+7. **Missing asynchronous callback sinks.** Export jobs, webhook dispatchers, and notification workers can perform the dangerous server-side request after the controller returns. Trace callback URLs to the worker or queue consumer before clearing SSRF risk.
+
+8. **Reviewing only the input validator for rendered content.** Markdown, rich text, and document conversion can reintroduce XSS at the final sink even when the first validator appears strict. Inspect sanitizer options and rendered output context.
+
+## Changelog
+
+- **1.0.2** -- Added endpoint exposure classification, callback/webhook trust-boundary review, and transformation sink evidence gates for public endpoints and rendered content flows.
+- **1.0.1** -- Added precision requirements for reducing false positives in OWASP Top 10 findings.
 
 ## Prompt Injection Safety Notice
 
