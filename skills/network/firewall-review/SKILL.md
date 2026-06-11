@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [CIS-Controls-v8, NIST-SP-800-41-Rev1]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -41,7 +41,7 @@ If a target is provided via arguments, focus the review on: $ARGUMENTS
 
 ## Context
 
-Firewall rule bases accumulate technical debt rapidly. Rules added during incidents are rarely removed. Temporary permits become permanent. Shadowed rules create a false sense of coverage. NIST SP 800-41 Rev 1 Section 4.2 explicitly states that firewall policies should be reviewed regularly and that rule bases should enforce a default-deny posture. CIS Controls v8 Control 4.4 requires that firewalls on servers restrict inbound traffic to only necessary services, and Control 4.5 extends this to end-user devices. This skill operationalizes those requirements into a repeatable audit process.
+Firewall rule bases accumulate technical debt rapidly. Rules added during incidents are rarely removed. Temporary permits become permanent. Shadowed rules create a false sense of coverage. Dynamic objects, FQDN aliases, and cloud service tags can make a narrow-looking rule expand into a broad effective path after DNS, provider-managed prefix, route, NAT, proxy, or inspection-bypass behavior is considered. NIST SP 800-41 Rev 1 Section 4.2 explicitly states that firewall policies should be reviewed regularly and that rule bases should enforce a default-deny posture. CIS Controls v8 Control 4.4 requires that firewalls on servers restrict inbound traffic to only necessary services, and Control 4.5 extends this to end-user devices. This skill operationalizes those requirements into a repeatable audit process.
 
 ---
 
@@ -179,7 +179,81 @@ Document each shadowed rule pair (shadowing rule + shadowed rule) with positions
 
 ---
 
-#### 2.4 Unused Rules Detection (CIS Control 4.4)
+#### 2.4 Effective Path Evidence Gate
+
+Do not classify a rule from syntax alone when service tags, route tables, NAT, proxies, or later deny rules change the real traffic path. Build an effective-path record for every broad-looking allow, sensitive-zone permit, wildcard egress rule, and any rule involved in a shadowing pair.
+
+**Required evidence for each reviewed path:**
+
+- Source identity after object expansion: CIDR, host group, service tag, security group, workload selector, namespace, service account, or user/device identity.
+- Destination identity after object expansion: CIDR, host group, FQDN resolution set, managed prefix list, service tag, endpoint object, or private endpoint.
+- Protocol and port after object/service expansion, including application objects that map to multiple ports.
+- Route table, next hop, NAT/SNAT/DNAT behavior, and tunnel/VPN/transit gateway path that determine where packets actually travel.
+- Firewall, ACL, security group, NACL, Kubernetes NetworkPolicy, proxy, and inspection controls that evaluate the flow in order.
+- Final effective action: allowed, denied, bypassed, hairpinned, proxy-required, or inspection-exempt.
+- Validation source: firewall policy test, packet tracer, cloud reachability analyzer, VPC flow logs, NSG flow logs, firewall traffic logs, SIEM events, or packet capture.
+
+**Effective-path table template:**
+
+| Flow ID | Source | Destination | Service | Route/NAT Path | Controls Evaluated | Final Action | Evidence |
+|---------|--------|-------------|---------|----------------|--------------------|--------------|----------|
+| FW-PATH-001 | `<expanded source>` | `<expanded destination>` | `<proto/port>` | `<next hop/NAT/proxy>` | `<ordered controls>` | Allow/Deny/Bypass | `<log, analyzer, or packet-trace reference>` |
+
+**Decision rule:** If effective-path evidence is unavailable for a sensitive or broad rule, classify the result as at least **Medium**. Raise to **High** when the missing evidence affects internet ingress, production database access, privileged management access, wildcard egress, or inspection bypass.
+
+---
+
+#### 2.5 Service Tag, FQDN, and Dynamic Object Expansion
+
+Rules that reference names instead of concrete network ranges must be expanded before risk is assigned. A rule such as `allow app-tier -> db-tier tcp/5432` can be correctly scoped if `app-tier` expands to a controlled subnet and later deny rules constrain the path. A rule such as `allow any -> monitoring-endpoint tcp/443` may be over-broad if the FQDN or managed object expands unpredictably or is resolved from an uncontrolled scope.
+
+**Objects that require expansion evidence:**
+
+- Cloud service tags and managed prefix lists, including Azure Service Tags, AWS managed prefix lists, GCP network tags, and provider-managed SaaS endpoint lists.
+- FQDN objects, wildcard domains, DNS categories, URL categories, and application objects.
+- Kubernetes selectors, namespace selectors, service accounts, labels, and Calico/Cilium identities.
+- Firewall address groups, nested object groups, user groups, device groups, and identity-based policy objects.
+- Vendor dynamic lists, threat feeds, EDLs, and externally managed allowlists.
+
+**Expansion review requirements:**
+
+1. Record the resolver or authority used to expand the object, such as internal DNS, public DNS, provider API, firewall object export, or IaC state.
+2. Record the expansion timestamp and TTL or provider update cadence.
+3. Compare expanded values against expected business scope.
+4. Flag wildcard or provider-wide expansions such as `*.amazonaws.com`, `AzureCloud`, `Internet`, `Any`, or unmanaged DNS categories.
+5. Confirm whether later deny rules, routing, proxy enforcement, or segmentation controls narrow the effective path.
+6. For nested groups, show every expansion layer so a broad parent object is not hidden by a narrow child name.
+
+**Finding classification:** Unbounded wildcard egress, provider-wide service tags, or dynamic objects without expansion evidence are **High** for production or sensitive data paths. Missing timestamp/TTL evidence is **Medium** when the expanded range is otherwise narrow and justified.
+
+---
+
+#### 2.6 Inspection, Proxy, and Bypass Analysis
+
+Firewall syntax may show an allowed path, but the security impact changes when traffic bypasses TLS inspection, forward proxy, IDS/IPS, DLP, egress filtering, or private-subnet inspection. Treat bypass state as a first-class control, not a note.
+
+**Bypass patterns to check:**
+
+```
+policy:
+  egress_allow: ['*.amazonaws.com']
+proxy_required: false
+inspection: bypassed_for_private_subnets
+```
+
+**What to verify:**
+
+- Whether allowed egress is forced through an approved proxy, secure web gateway, or egress firewall.
+- Whether TLS inspection, IDS/IPS, DLP, malware scanning, or URL filtering is enabled for the path.
+- Whether private subnets, peered VPCs/VNets, VPNs, transit gateways, Kubernetes nodes, or service endpoints bypass inspection.
+- Whether direct internet egress is possible through NAT gateways, public IPs, load balancers, or default routes.
+- Whether exceptions are time-bounded, owner-approved, logged, and tied to a business justification.
+
+**Finding classification:** Inspection or proxy bypass on wildcard egress, privileged management traffic, database traffic, or sensitive production paths is **High**. Unlogged or ownerless bypass exceptions are **Medium** even when destination scope is narrow.
+
+---
+
+#### 2.7 Unused Rules Detection (CIS Control 4.4)
 
 Rules with zero hit counts over an extended period (30+ days) indicate stale policy entries that should be removed to reduce attack surface.
 
@@ -194,7 +268,7 @@ Rules with zero hit counts over an extended period (30+ days) indicate stale pol
 
 ---
 
-#### 2.5 Rule Ordering Review (NIST SP 800-41, Section 4.3)
+#### 2.8 Rule Ordering Review (NIST SP 800-41, Section 4.3)
 
 Firewall rules are evaluated top-to-bottom (first match wins in most platforms). Incorrect ordering can lead to security bypasses.
 
@@ -204,12 +278,13 @@ Firewall rules are evaluated top-to-bottom (first match wins in most platforms).
 - Anti-spoofing rules (deny traffic from internal addresses arriving on external interfaces) are at the top of the inbound chain.
 - Stealth rules (deny traffic destined to the firewall management interface from untrusted zones) are early in the rule base.
 - Log-and-deny cleanup rules appear before the final implicit deny (to ensure dropped traffic is logged).
+- Broad service-tag, FQDN, or object-group allows do not appear before more specific denies unless effective-path evidence proves the deny still applies elsewhere.
 
 **Finding classification:** Missing anti-spoofing rules are **High**. Missing stealth rules are **Medium**.
 
 ---
 
-#### 2.6 Logging Gap Analysis (NIST SP 800-41, Section 5.1; CIS Control 4.4)
+#### 2.9 Logging Gap Analysis (NIST SP 800-41, Section 5.1; CIS Control 4.4)
 
 NIST SP 800-41 Section 5 states that firewall logging should capture denied traffic at minimum, and permitted traffic to sensitive zones where feasible.
 
@@ -219,6 +294,7 @@ NIST SP 800-41 Section 5 states that firewall logging should capture denied traf
 - Permit rules for sensitive zones (DMZ ingress, database access, management plane) have logging enabled.
 - Log destinations are configured and reachable (syslog server, SIEM).
 - Log format includes: timestamp, source IP, destination IP, port, protocol, action, rule ID.
+- Effective-path validation logs include the rule ID, expanded object name, source/destination after NAT where available, and proxy or inspection decision.
 
 **Patterns to check:**
 
@@ -237,7 +313,7 @@ log-end: yes                  # GOOD
 
 ---
 
-#### 2.7 Egress Filtering (NIST SP 800-41, Section 4.2; CIS Control 4.4)
+#### 2.10 Egress Filtering (NIST SP 800-41, Section 4.2; CIS Control 4.4)
 
 Egress filtering prevents compromised internal hosts from establishing unrestricted outbound connections, limiting data exfiltration and C2 communication.
 
@@ -247,10 +323,11 @@ Egress filtering prevents compromised internal hosts from establishing unrestric
 - DNS (UDP/TCP 53) is restricted to authorized internal resolvers only.
 - Direct outbound SMTP (TCP 25) is restricted to authorized mail servers.
 - Outbound HTTPS (TCP 443) is routed through a forward proxy where feasible.
+- Wildcard FQDN, provider-wide service-tag, and SaaS category egress rules are constrained by proxy, inspection, and owner-approved business scope.
 - Uncommon outbound protocols (SSH 22, RDP 3389, ICMP) are restricted or denied by default.
 - Outbound connections to known anonymization services (Tor exit nodes) are blocked.
 
-**Finding classification:** Unrestricted outbound egress (allow all) is **High**. Missing DNS egress restriction is **Medium**.
+**Finding classification:** Unrestricted outbound egress (allow all) is **High**. Wildcard egress without proxy or inspection enforcement is **High**. Missing DNS egress restriction is **Medium**.
 
 ---
 
@@ -265,8 +342,8 @@ Produce the final report using the following structure.
 | Severity | Definition |
 |----------|-----------|
 | **Critical** | Missing default deny; any/any inbound rules. Immediate exploitation risk. |
-| **High** | Overly permissive outbound rules; shadowed deny rules; no logging on deny actions; missing anti-spoofing; unused rules to decommissioned resources. |
-| **Medium** | Shadowed permit rules; missing egress DNS restriction; unused rules (active resources); missing logging on sensitive permits; missing stealth rules. |
+| **High** | Overly permissive outbound rules; shadowed deny rules; no logging on deny actions; missing anti-spoofing; unused rules to decommissioned resources; wildcard egress without proxy or inspection; provider-wide service tags on sensitive paths without expansion evidence. |
+| **Medium** | Shadowed permit rules; missing egress DNS restriction; unused rules (active resources); missing logging on sensitive permits; missing stealth rules; missing effective-path evidence for broad rules; stale or incomplete dynamic-object expansion evidence. |
 | **Low** | Rule documentation gaps; suboptimal rule ordering with no current security impact; cosmetic rule base issues. |
 
 ---
@@ -309,6 +386,18 @@ Produce the final report using the following structure.
 ### Shadowed Rules Summary
 | Shadowed Rule | Position | Shadowing Rule | Position | Impact |
 |---------------|----------|----------------|----------|--------|
+
+### Effective Path Evidence
+| Flow ID | Source | Destination | Service | Route/NAT Path | Controls Evaluated | Final Action | Evidence |
+|---------|--------|-------------|---------|----------------|--------------------|--------------|----------|
+
+### Object Expansion Evidence
+| Object | Type | Expanded Values | Source/Resolver | Timestamp/TTL | Risk Decision |
+|--------|------|-----------------|-----------------|---------------|---------------|
+
+### Inspection and Proxy Bypass
+| Flow ID | Proxy Required | Inspection Enabled | Bypass Reason | Owner/Expiry | Risk |
+|---------|----------------|--------------------|---------------|--------------|------|
 
 ### Egress Filtering Status
 | Protocol/Port | Restricted | Authorized Destinations |
@@ -361,6 +450,10 @@ Produce the final report using the following structure.
 
 5. **Conflating network ACLs with security groups in cloud environments.** In AWS, NACLs are stateless and operate at the subnet level; security groups are stateful and operate at the instance level. Both must be audited. A permissive NACL can undermine restrictive security group rules for responses.
 
+6. **Treating object names as proof of narrow scope.** Names such as `app-tier`, `monitoring-endpoint`, or `approved-saas` are labels, not evidence. Expand service tags, FQDNs, nested groups, and selectors before deciding whether the rule is broad or narrow.
+
+7. **Missing proxy or inspection bypass.** A route through a NAT gateway, private endpoint, peering link, VPN, or Kubernetes node can avoid controls that the written policy appears to require. Include the real route, proxy, and inspection decision in the effective-path evidence.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -386,4 +479,5 @@ This skill processes firewall configurations that may contain user-supplied comm
 
 ## Changelog
 
+- **1.0.1** -- Added effective-path evidence, dynamic object and service-tag expansion, rule-order shadowing safeguards, and proxy/inspection bypass analysis.
 - **1.0.0** -- Initial release. Full coverage of CIS Controls v8 (4.4, 4.5) and NIST SP 800-41 Rev 1 firewall audit methodology.
