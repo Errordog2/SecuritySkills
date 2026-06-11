@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [CVSS-4.0, CWE]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -49,6 +49,9 @@ Before starting, collect or confirm:
 - [ ] **Scan scope:** Target IP ranges, hostnames, applications, containers, or cloud accounts
 - [ ] **Authentication status:** Are scans currently authenticated (credentialed) or unauthenticated?
 - [ ] **False positive examples:** Specific findings suspected or confirmed as false positives, with evidence
+- [ ] **Waiver lifecycle records:** Owner, expiry, linked benign proof, renewal history, and rollback criteria for waived findings
+- [ ] **Rule precedence model:** How include rules, exclude rules, severity overrides, baseline filters, and framework-specific overrides are ordered
+- [ ] **Regression evidence:** Production parity, scanner/parser version history, and post-upgrade fixture or sample validation results
 - [ ] **Scan frequency:** Current scan schedule and any performance constraints
 - [ ] **Result volume:** Approximate number of findings per scan cycle and false positive rate if known
 - [ ] **Compliance requirements:** Whether scans must meet specific compliance mandates (PCI ASV, DISA STIG, CIS Benchmark)
@@ -99,6 +102,20 @@ False Positive Record:
 - Disposition:         [Confirmed FP -- suppress | Accepted Risk -- document | True Positive -- remediate]
 ```
 
+#### Waived Finding Lifecycle Gate
+
+A waiver is not the same as careless suppression. Before treating a waived finding as safely tuned, require evidence that the waiver is time-bounded, owned, test-backed, and reversible.
+
+| Evidence | Required Detail | Tuning Failure Detected |
+|---|---|---|
+| Waiver owner | Named technical owner and risk approver for the specific plugin/CVE/asset scope | Orphaned waiver persists after ownership changes |
+| Expiry and renewal | Expiry date, review cadence, renewal evidence, and escalation path for expired waivers | Permanent suppression disguised as a temporary waiver |
+| Linked benign proof | Benign fixture, manual validation, authenticated re-scan, or compensating evidence proving the finding is not exploitable in scope | Waiver created from analyst judgment only |
+| Scope boundary | Exact asset, environment, component, rule, and vulnerability scope covered by the waiver | Waiver applies globally when only one case was validated |
+| Rollback trigger | Scanner/parser upgrade, policy change, asset exposure change, or exploit intelligence that forces re-validation | Stale waiver survives changed detection logic |
+
+**Decision rule:** Mark waived findings as `Controlled Waiver` only when owner, expiry, linked benign proof, scope, and rollback triggers are documented. Mark them `Suppression Risk` when any of those fields are missing or when the waiver is open-ended.
+
 ### Step 2: Scan Policy Configuration
 
 Configure or optimize scan policies to balance detection coverage, accuracy, and performance.
@@ -135,8 +152,22 @@ Configure or optimize scan policies to balance detection coverage, accuracy, and
 |---|---|---|
 | **Host exclusions** | Fragile systems that crash under scan load (legacy SCADA, medical devices, IoT) | Risk acceptance document; alternative assessment method (passive monitoring) |
 | **Plugin exclusions** | Confirmed persistent false positive across all assets for a specific plugin | False positive evidence for at least 3 scan cycles; periodic re-evaluation (quarterly) |
-| **Time-based exclusions** | Systems that cannot be scanned during business hours | Scan scheduling adjustment (see Step 6) |
+| **Time-based exclusions** | Systems that cannot be scanned during business hours | Scan scheduling adjustment (see Step 7) |
 | **Credential exclusions** | Systems where credentialed scanning is not permitted by policy | Documented reason; accept reduced detection accuracy |
+
+#### Rule Precedence and Override Collision Gate
+
+Include/exclude rules, baselines, and severity overrides can collide. Review the effective rule order rather than checking whether each rule exists in isolation.
+
+| Evidence | Required Detail | Collision Pattern Detected |
+|---|---|---|
+| Effective rule order | Scanner-specific precedence between global excludes, asset groups, include overrides, severity overrides, and compliance profiles | Generic exclusion wins over intended framework-specific detection |
+| Specificity tie-breaker | How scanner handles host, tag, plugin family, rule ID, path, and environment specificity | Broad tuning masks high-value assets or production-only checks |
+| Rule simulation | Sample vulnerable and benign findings showing which rule fires after all filters are applied | Expected include is silently dropped |
+| Exception conflict review | Conflicts between risk acceptance, severity override, suppression, and compliance-mandated plugins | Compliance evidence removed by vulnerability-noise tuning |
+| Change record | Ticket or change history for the tuning rule that changed effective precedence | Rule collision introduced without review |
+
+**Decision rule:** Mark tuning as `Precedence Verified` only when the effective rule order is demonstrated with representative vulnerable and benign samples. If scanner behavior cannot be proven, record `Not Evaluable from Rule List Alone`.
 
 ### Step 3: Authenticated vs. Unauthenticated Scanning
 
@@ -255,7 +286,22 @@ Cross-Scanner Correlation Summary:
 - Coverage Gaps Identified: [List by scanner and vulnerability class]
 ```
 
-### Step 6: Scan Scheduling Optimization
+### Step 6: Baseline and Upgrade Regression Validation
+
+Validate that tuning still works after environment changes, scanner updates, parser changes, and baseline refreshes.
+
+| Evidence | Required Detail | Drift Detected |
+|---|---|---|
+| Production parity | Proof that staging/test baseline reflects production scanner credentials, plugins, asset tags, and exposure classes | Staging-only tuning hides production behavior |
+| Scanner/parser version | Current scanner engine, plugin feed, parser, template, or ruleset version and prior version | Upgrade invalidated old FP assumptions |
+| Golden vulnerable sample | Known true-positive sample that must remain detectable after tuning | Tuning suppresses intended detection |
+| Linked benign sample | Known benign sample that should remain waived or downgraded with evidence | Regression reintroduces known noise without context |
+| Post-upgrade run | Test or sample scan after upgrade/baseline refresh with pass/fail result and owner | Old waiver accepted without re-test |
+| Drift threshold | Maximum acceptable change in FP rate, TP count, parser fallback rate, or coverage count | Silent degradation after policy or parser change |
+
+**Decision rule:** Treat staging-only validation, unknown production drift, or untested scanner/parser upgrades as `Regression Evidence Missing`. Do not promote a tuning rule to production until true-positive and benign regression samples both pass under the effective rule order.
+
+### Step 7: Scan Scheduling Optimization
 
 Configure scan schedules to balance coverage, freshness, and operational impact.
 
@@ -303,7 +349,7 @@ Produce a structured report with these exact sections:
 ```markdown
 ## Scanner Tuning Report
 **Date:** [YYYY-MM-DD]
-**Skill:** scanner-tuning v1.0.0
+**Skill:** scanner-tuning v1.0.1
 **Frameworks:** CVSS 4.0, CWE
 **Reviewer:** AI-assisted (human review required for policy changes and severity overrides)
 
@@ -336,6 +382,12 @@ Highlight the most impactful tuning recommendations.]
 | CVE ID | Asset | Original Severity | Adjusted Severity | Justification | Review Date |
 |---|---|---|---|---|---|
 | [CVE-ID] | [asset] | [severity] | [severity] | [CVSS 4.0 metric adjustment] | [date] |
+
+### Waiver Lifecycle and Rule Precedence
+
+| Finding/Rule | Waiver Owner | Expiry | Linked Benign Proof | Scope Boundary | Include/Exclude Precedence | Regression Status | Decision |
+|---|---|---|---|---|---|---|---|
+| [plugin/check/rule] | [owner] | [date] | [fixture/rescan/manual evidence] | [asset/env/rule scope] | [effective order or collision] | [pass/fail/missing] | [Controlled Waiver / Suppression Risk / Precedence Verified / Not Evaluable from Rule List Alone] |
 
 ### Cross-Scanner Correlation
 [If multiple scanners are in use]
@@ -398,6 +450,21 @@ Common Weakness Enumeration. A community-developed list of software and hardware
 4. **Failing to re-evaluate severity overrides when context changes.** A severity downgrade justified by network segmentation becomes invalid if the segmentation is later removed or modified. Severity overrides must be reviewed quarterly and immediately upon any change to the deployment context (network changes, system migration, data classification changes).
 
 5. **Not correlating results across scanners.** Organizations running multiple scanners often treat each scanner's output independently, leading to duplicate remediation efforts for the same vulnerability and missed findings that only one scanner detects. Establish a correlation process using CVE ID as the primary key and CWE as a fallback for non-CVE findings.
+
+6. **Treating waived findings as permanently safe.** A waiver without an owner, expiry, linked benign proof, scope boundary, and rollback trigger is a suppression risk, not disciplined scanner tuning.
+
+7. **Reviewing include and exclude rules independently.** Rule lists can look correct while effective precedence still lets a broad exclusion override a framework-specific include or high-value asset rule. Verify the effective order with sample findings.
+
+8. **Promoting staging-only tuning after scanner or parser changes.** Parser upgrades, template updates, plugin feed changes, and baseline refreshes can invalidate old assumptions. Re-run true-positive and benign regression samples before carrying tuning forward.
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0.1 | 2026-06-11 | Added waived-finding lifecycle, rule-precedence collision, and post-upgrade regression evidence gates |
+| 1.0.0 | 2025-03-06 | Initial release |
 
 ---
 
