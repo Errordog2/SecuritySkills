@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -53,6 +53,9 @@ Before beginning, gather or confirm:
 - [ ] **Target SIEM platform:** Microsoft Sentinel (KQL) or Splunk (SPL).
 - [ ] **Detection objective:** What behavior or threat is being detected? Include ATT&CK technique ID if known.
 - [ ] **Available data tables/indexes:** Which log tables (Sentinel) or indexes (Splunk) contain the relevant data?
+- [ ] **Backend field mappings:** Source field, normalized field, and final KQL/SPL field names for every entity used by the rule.
+- [ ] **Parser and normalization quality:** Parser version, field population rate, fallback rate, conversion test result, and known ingest lag.
+- [ ] **Severity context inputs:** Asset criticality, user privilege, exposure, environment, and alert-response context used to derive severity.
 - [ ] **Environment baseline:** Normal volume and patterns for the data source (e.g., average daily failed logon count, typical admin logon hours).
 - [ ] **Alert priority and response:** Desired severity level and expected analyst response procedure.
 - [ ] **Performance constraints:** Query time window, maximum execution time, and scheduled frequency.
@@ -77,6 +80,21 @@ Select the appropriate detection logic pattern based on the threat being detecte
 | **Correlation** | Multi-table joins, multi-stage attacks | High |
 | **Behavioral baseline** | Deviation from normal, first-seen analysis | High |
 | **Impossible travel** | Geographically implausible authentication | High |
+
+#### Detection Semantics, Parser, and Severity Boundary Gate
+
+Review the rule in three separate layers: the detection behavior, the backend/parser evidence that makes the fields reliable, and the severity/context derivation that decides analyst priority.
+
+| Layer | Required Evidence | Failure Mode Detected |
+|---|---|---|
+| Detection semantics | Plain-language behavior, ATT&CK technique, entities, temporal relationship, and true-positive test event | Query syntax is reviewed without confirming the intended behavior |
+| Canonical fields | Source field, normalized field, backend field, type, unit, and null-handling for each key entity | Portable rule breaks when `ParentImage`, `parent.process.executable`, or `proc.name` differ by backend |
+| Parser quality | Parser version, field population rate, fallback/parser-error rate, sample raw-to-normalized events, and recent parser changes | Stable-looking rule depends on missing or lossy normalization |
+| Backend conversion | Sigma/KQL/SPL conversion output, unsupported operators, renamed fields, and platform-specific function differences | Converted rule silently drops a condition or changes match semantics |
+| Severity context | Asset criticality, user role, identity risk, exposure, environment, confidence, and response SLA inputs | Hard-coded high/low severity ignores local risk context |
+| Ingest freshness | Ingest lag, late-arrival rate, timezone handling, and scheduler lookback overlap for the target backend | Rule logic is correct but misses events due to backend timing assumptions |
+
+**Decision rule:** If backend field mapping, parser quality, conversion parity, or severity context evidence is missing, record the rule as `Not Evaluable from Query Text Alone` instead of treating simple syntax as weak or stable syntax as sufficient.
 
 ### Step 2: Write the Detection Query
 
@@ -433,6 +451,7 @@ index=wineventlog sourcetype="WinEventLog:Security" EventCode=4624 LogonType=3
 3. **Threshold selection:** Set the initial threshold at mean + 2 standard deviations to capture anomalous activity while filtering normal variance.
 4. **Iterative tuning:** After deployment, review alerts weekly for the first month. Adjust the threshold based on TP/FP ratio.
 5. **Exclusion management:** Add exclusions for confirmed legitimate activity. Document each exclusion with a ticket reference and review date.
+6. **Context-sensitive severity:** Derive severity from the detection behavior plus asset/user/environment context. Do not hard-code severity from match logic alone.
 
 **Threshold tuning parameters:**
 
@@ -444,6 +463,20 @@ index=wineventlog sourcetype="WinEventLog:Security" EventCode=4624 LogonType=3
 | `lookback period` | Historical data to evaluate | `ago(1h)`, `ago(24h)` |
 | `frequency` | How often the rule runs | Every 5m, 15m, 1h |
 | `suppression window` | Cooldown after firing to prevent duplicate alerts | 1h, 4h, 24h |
+
+#### Severity and Context Derivation Gate
+
+Severity should be reviewed separately from the query match condition. A rule can match correctly but still over-alert or understate risk when context is absent.
+
+| Evidence | Required Detail | Severity Error Detected |
+|---|---|---|
+| Asset context | Criticality, internet exposure, crown-jewel tag, data sensitivity, and environment | Low-value lab host treated like production payment infrastructure, or vice versa |
+| User context | Privilege tier, service-account status, break-glass status, department, and known admin window | Admin and ordinary-user behavior are scored the same |
+| Event confidence | Parser quality, field completeness, correlation count, enrichment freshness, and source reliability | High severity assigned to low-confidence parsed data |
+| Response SLA | Analyst action, escalation path, containment expectation, and business-hours/on-call routing | Severity does not map to operational response |
+| Downgrade/upgrade rule | Documented conditions that change priority without changing detection semantics | Rule logic and priority logic are mixed together |
+
+**Decision rule:** Mark severity as `Context-Derived` only when the report includes asset/user/environment evidence and the response SLA. Otherwise mark it `Severity Context Missing` and keep match logic findings separate from priority findings.
 
 **KQL alert rule scheduling (Sentinel Analytics Rule):**
 
@@ -509,7 +542,7 @@ Produce SIEM rule deliverables in this structure:
 ```markdown
 ## SIEM Detection Rule: [Rule Name]
 **Date:** [YYYY-MM-DD]
-**Skill:** siem-rules v1.0.0
+**Skill:** siem-rules v1.0.1
 **Framework:** MITRE ATT&CK v16
 **Platform:** [Microsoft Sentinel (KQL) | Splunk (SPL)]
 
@@ -521,6 +554,8 @@ Produce SIEM rule deliverables in this structure:
 | ATT&CK Tactic | [Credential Access (TA0006)] |
 | Severity | [High / Medium / Low / Informational] |
 | Data Source | [Table/Index name] |
+| Backend Parser / Normalization | [parser/version/field mapping evidence] |
+| Severity Derivation | [context-derived / hard-coded / missing evidence] |
 | Status | [Draft / Testing / Active] |
 
 ### Detection Query
@@ -535,11 +570,21 @@ Produce SIEM rule deliverables in this structure:
 | Suppression | [Xh] | [Cooldown period] |
 
 ### Entity Mapping
-| Entity Type | Source Field |
-|-------------|-------------|
-| Account | [UserPrincipalName / TargetUserName] |
-| IP | [IPAddress / IpAddress] |
-| Host | [Computer / ComputerName] |
+| Entity Type | Source Field | Normalized Field | Backend Field | Parser Evidence |
+|-------------|-------------|---|---|---|
+| Account | [raw user field] | [user.name / UserPrincipalName] | [KQL/SPL field] | [population rate/sample] |
+| IP | [raw IP field] | [source.ip / IPAddress] | [KQL/SPL field] | [population rate/sample] |
+| Host | [raw host field] | [host.name / Computer] | [KQL/SPL field] | [population rate/sample] |
+
+### Parser and Severity Evidence
+
+| Evidence Area | Current Evidence | Decision |
+|---|---|---|
+| Detection Semantics | [behavior, ATT&CK mapping, true-positive test] | [Pass / Gap] |
+| Backend Field Mapping | [source -> normalized -> backend fields] | [Verified / Not Evaluable from Query Text Alone] |
+| Parser Quality | [version, population rate, fallback rate, raw-to-normalized sample] | [Stable / Drift Risk / Missing] |
+| Conversion Parity | [Sigma/KQL/SPL conversion notes and unsupported operators] | [Equivalent / Changed Semantics / Missing] |
+| Severity Context | [asset/user/environment/response SLA] | [Context-Derived / Severity Context Missing] |
 
 ### Known False Positives
 - [List specific FP sources]
@@ -632,9 +677,30 @@ Deploying a rule without confirming it fires on known-malicious activity is depl
 
 A detection rule that fires every 5 minutes on the same ongoing activity (e.g., a brute force attack lasting 2 hours) floods the alert queue with duplicates. Configure alert suppression or deduplication to prevent the same incident from generating hundreds of identical alerts. Use suppression windows and entity-based grouping to consolidate related alerts.
 
+### Pitfall 6: Assuming Query Syntax Proves Backend Portability
+
+A rule can be logically sound while failing in one backend because parser normalization, field names, or conversion semantics differ. Verify source-to-normalized-to-backend field mappings before calling the rule portable.
+
+### Pitfall 7: Treating Parser Quality as Static
+
+Parser versions, ingest pipelines, enrichment jobs, and fallback handlers change over time. Record parser version, field population rate, fallback rate, and raw-to-normalized samples when judging rule quality.
+
+### Pitfall 8: Mixing Match Logic with Severity Logic
+
+Detection conditions decide whether behavior matched. Severity decides how urgent the alert is in this environment. Hard-coded severity without asset, user, exposure, confidence, and response-context evidence can over-alert or understate risk.
+
 ---
 
-## 8. Prompt Injection Safety Notice
+## 8. Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0.1 | 2026-06-11 | Added detection-semantics, backend parser evidence, conversion parity, and severity-context gates |
+| 1.0.0 | 2025-03-06 | Initial release |
+
+---
+
+## 9. Prompt Injection Safety Notice
 
 This skill processes user-supplied content that may include SIEM query drafts, log samples, alert configurations, and detection logic descriptions. The agent must adhere to the following safety constraints:
 
@@ -646,7 +712,7 @@ This skill processes user-supplied content that may include SIEM query drafts, l
 
 ---
 
-## 9. References
+## 10. References
 
 1. **MITRE ATT&CK Enterprise Matrix v16** -- https://attack.mitre.org/matrices/enterprise/
 2. **Microsoft Sentinel KQL Reference** -- https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/
