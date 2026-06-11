@@ -12,7 +12,7 @@ phase: [build, review]
 frameworks: [OWASP-ASVS, CWE-Top-25, OWASP-Top-10]
 difficulty: intermediate
 time_estimate: "15-45min per module"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -110,6 +110,70 @@ Remediation: Canonicalize the resolved path and verify it remains within the exp
 - [ ] OS commands, if unavoidable, use allowlisted arguments and avoid shell interpretation.
 - [ ] File path operations validate and canonicalize against a base directory.
 - [ ] Regular expressions used for validation are anchored (`^...$`) and tested for ReDoS.
+
+### 2.4 Sanitizer and Sink Context Matrix
+
+Do not judge sanitizers in isolation. A sanitizer is effective only for the sink context where the value is used. A value escaped for HTML body text can still be unsafe in a JavaScript string, CSS context, URL, SQL fragment, shell command, HTTP header, or template directive. Conversely, a value sent to a safe sink such as `textContent` may not be exploitable even if it was manually escaped first.
+
+**Record the sanitizer/sink decision for each injection finding or false-positive dismissal:**
+
+| Source | Transformation/Sanitizer | Sink | Sink Context | Compatible? | Decision Evidence |
+|---|---|---|---|---|---|
+| `userInput` | `htmlEscape()` | `element.textContent` | DOM text node | Yes | Safe sink; value is not interpreted as HTML/script |
+| `userInput` | `htmlEscape()` | `element.innerHTML` | HTML parser | Partial | HTML body escaping may still fail if later placed in attribute/script |
+| `sortField` | allowlist `['created_at','total']` | SQL `ORDER BY ${sortField}` | SQL identifier | Yes, if exact enum and no fallback | Dynamic identifier constrained to known columns |
+| `nextUrl` | prefix `'/'` check | `Location` header | Redirect URL | No | `//evil.example` and encoded variants can become external redirects |
+
+**Common sink context rules:**
+
+- DOM text: prefer `textContent` or equivalent safe text APIs. HTML escaping is defense-in-depth, not proof of exploitability.
+- HTML body or attribute: require context-specific output encoding. Attribute contexts must quote values and encode quotes.
+- JavaScript string/template: HTML escaping is not sufficient; require JavaScript string encoding or avoid executable contexts.
+- URL or redirect: require URL parsing/canonicalization, same-origin or allowlist checks, encoded/slash/backslash/protocol-relative bypass tests, and safe redirect helpers.
+- HTTP header: reject CRLF, normalize/canonicalize, and verify header-specific rules such as `Location`, `Set-Cookie`, and cache headers.
+- SQL identifiers such as `ORDER BY`: parameterized values do not parameterize identifiers; require exact allowlists or query-builder identifier APIs.
+- SQL values: require parameterized queries or ORM bind variables, not string escaping.
+- Shell command: avoid shell interpretation. If unavoidable, use argument arrays and strict allowlists.
+- Template directives: verify whether the engine auto-escapes this context and whether raw/unescaped helpers are enabled.
+
+**False-positive reduction rule:** If a context-compatible sanitizer or safe sink is documented and exploit preconditions are absent, downgrade or close the finding as `False Positive` or `Informational` rather than reporting a high-severity issue.
+
+### 2.5 Exploit Preconditions and Dynamic Construct Review
+
+Every dynamic construct must include an explicit exploitability note. Pattern matching alone is not enough: dynamic SQL, redirects, templates, file paths, commands, and headers can be safe when strict preconditions are enforced, or dangerous when validation is incomplete for the actual sink.
+
+**Required precondition record:**
+
+| Field | Question to Answer |
+|---|---|
+| **Attacker control** | Can an attacker influence the value directly, indirectly, or through stored data? |
+| **Validation boundary** | Is validation enforced server-side, before every use, and on the canonicalized value? |
+| **Allowed set** | Is the value constrained to an exact enum, schema, parser result, or trusted object reference? |
+| **Sink interpretation** | How does the sink interpret the value: text, HTML, JS, SQL identifier, URL, header, path, shell, or template? |
+| **Bypass cases tested** | Were encoded, mixed-case, protocol-relative, unicode, delimiter, comment, CRLF, traversal, or fallback cases tested? |
+| **Failure behavior** | Does validation fail closed without using a default attacker-controlled or broad value? |
+| **Decision** | Exploitable, Not Exploitable, Not Evaluable, False Positive, or Needs Test |
+
+**Dynamic SQL identifier example:**
+
+```javascript
+const sql = `select * from invoices order by ${sortField}`;
+const allowed = ['created_at','total'];
+if (!allowed.includes(sortField)) throw new Error('bad sort');
+```
+
+This is not automatically SQL injection when `sortField` is server-side validated against an exact enum before query construction and no fallback uses the original value. Record it as safe only if the allowlist covers all paths, comparisons are exact, and the database adapter does not concatenate additional attacker-controlled fragments.
+
+**Redirect/header sink bypass example:**
+
+```javascript
+res.setHeader('Location', nextUrl);
+// nextUrl validated only for prefix '/' but accepts '//evil.example'
+```
+
+Prefix-only checks are insufficient for redirect sinks. Test protocol-relative URLs (`//evil.example`), encoded slashes (`/%2f%2fevil.example`), backslashes (`/\\evil.example`), CRLF injection, mixed encodings, base URL resolution, and framework-specific normalization before declaring the redirect safe.
+
+**Finding classification:** Missing exploit-precondition evidence is **Medium** when a dynamic construct reaches a sensitive sink. Raise to **High** when attacker control, incomplete canonicalization, or sink-specific bypasses are confirmed. Downgrade to **Low/Informational** when the sink is safe or the allowlist/preconditions fully prevent exploitation.
 
 ---
 
@@ -422,6 +486,10 @@ Each finding produced by this review must include the following fields:
 | **Evidence** | Relevant code snippet demonstrating the issue |
 | **Remediation** | Specific fix with code example where possible |
 | **Status** | Open, Mitigated, Accepted Risk, False Positive |
+| **Sink Context** | HTML, DOM text, JS, SQL value, SQL identifier, URL/redirect, HTTP header, path, shell, template, or other |
+| **Sanitizer/Validation Fit** | Compatible, incompatible, partial, absent, or not applicable |
+| **Exploit Preconditions** | Attacker control, validation boundary, allowed set, bypass cases, and failure behavior |
+| **Exploitability Decision** | Exploitable, Not Exploitable, Not Evaluable, False Positive, or Needs Test |
 
 ### Severity Definitions
 
@@ -445,7 +513,7 @@ The final review output must be structured as follows:
 **Scope:** [list of files reviewed]
 **Languages:** [detected languages and frameworks]
 **Date:** [review date]
-**Reviewer:** AI Agent -- secure-code-review skill v1.0.0
+**Reviewer:** AI Agent -- secure-code-review skill v1.0.1
 
 ### Summary
 - Critical: [count]
@@ -466,10 +534,22 @@ The final review output must be structured as follows:
   ```[language]
   [code snippet]
   ```
+- **Sink Context:** [HTML|DOM text|JS|SQL value|SQL identifier|URL/redirect|HTTP header|path|shell|template|other]
+- **Sanitizer/Validation Fit:** [Compatible|Incompatible|Partial|Absent|Not applicable]
+- **Exploit Preconditions:** [attacker control, validation boundary, allowed set, bypass cases, failure behavior]
+- **Exploitability Decision:** [Exploitable|Not Exploitable|Not Evaluable|False Positive|Needs Test]
 - **Remediation:** [specific fix with code example]
 - **Status:** Open
 
 [Repeat for each finding]
+
+### Sanitizer and Sink Matrix
+| Finding/Flow | Source | Sanitizer or Validation | Sink | Context | Compatible? | Evidence |
+|---|---|---|---|---|---|---|
+
+### Exploit Preconditions
+| Finding/Flow | Attacker Control | Validation Boundary | Allowed Set | Sink Interpretation | Bypass Cases Tested | Failure Behavior | Decision |
+|---|---|---|---|---|---|---|---|
 
 ### ASVS Coverage Matrix
 | ASVS Section | Applicable | Findings | Pass/Fail |
@@ -540,6 +620,21 @@ The final review output must be structured as follows:
 4. **Treating authentication as authorization.** Verifying that a user is logged in is not the same as verifying they are permitted to perform the requested action. Every endpoint must enforce both authentication and authorization, including ownership checks for resource-level access.
 
 5. **Overlooking secrets in non-obvious locations.** Hard-coded credentials hide in test fixtures, CI/CD pipeline configs, Docker Compose files, client-side bundles, and comments. Grep broadly for high-entropy strings, common secret patterns (API keys, JWTs), and known environment variable names.
+
+6. **Treating the sanitizer name as proof.** `escape`, `sanitize`, `clean`, or `safe` in a function name does not prove the output is safe for the sink. Match the sanitizer to the exact interpreter context and record evidence.
+
+7. **Missing safe sinks.** APIs such as `textContent`, parameterized SQL values, framework response helpers, or generated filenames can remove exploitability. Do not overstate severity when the sink does not interpret the value as code, markup, or control data.
+
+8. **Ignoring sink-specific bypasses.** Redirects, headers, templates, URLs, SQL identifiers, and paths all have different canonicalization rules. Prefix-only checks, naive escaping, and partial allowlists frequently fail in one sink while appearing safe in another.
+
+9. **Skipping exploit-precondition reasoning.** A dynamic construct is not automatically vulnerable or safe. Record attacker control, canonicalization, allowlist strength, failure behavior, and bypass tests before assigning severity.
+
+---
+
+## Changelog
+
+- **1.0.1** -- Added sanitizer/sink compatibility matrix, exploit-precondition recording, safe-sink false-positive handling, and sink-specific bypass checks for redirects, headers, templates, URLs, and SQL identifiers.
+- **1.0.0** -- Initial release for OWASP ASVS and CWE Top 25 secure code reviews.
 
 ---
 
