@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [CIS-GCP-v2.0.0]
 difficulty: intermediate
 time_estimate: "60-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -54,6 +54,9 @@ The CIS Google Cloud Platform Foundation Benchmark v2.0.0 is a consensus-driven 
 - IAM policy bindings and org policy definitions
 - VPC and firewall rule definitions
 - Cloud Audit Logs configuration
+- Resource hierarchy evidence for organization, folder, project, and effective Organization Policy constraints
+- IAM exports that include Google-managed service agents, service accounts, inherited bindings, custom roles, conditions, and justification metadata
+- Logging sink destinations, inclusion filters, exclusion filters, retention, and sampled Data Access coverage for sensitive services
 
 ---
 
@@ -88,7 +91,75 @@ For detailed CIS benchmark checklist items with specific Terraform patterns, gre
 
 ---
 
-### Step 9: Compile Assessment Report
+### Step 9: Effective Org Policy, Service Agent, and Logging Evidence
+
+Before compiling the final report, reconcile project-local findings with inherited organization or folder policy, Google-managed service-agent privilege, and log export coverage. Do not mark a control pass or fail from a project-local artifact alone when the effective posture depends on inherited policy, exceptions, delegated service identities, or selective logging exclusions.
+
+#### 9.1 Organization Policy Inheritance Gate
+
+Record the effective constraint path for every project or folder in scope:
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Resource hierarchy | Organization ID, folder path, project ID, and retrieval timestamp |
+| Constraint policy | Constraint name, scope, policy type, rules, enforcement state, dry-run state if available, and inheritance behavior |
+| Effective policy | Effective value at project/resource scope, source scope, merge/override behavior, and evaluation timestamp |
+| Exceptions | Folder or project override, conditional rule, tag-based exception, dry-run-only policy, owner, expiry, and residual risk |
+| Decision | Inherited pass, local pass, inherited deny/allow, exception, failed, or Not Evaluable |
+
+Rules:
+- Treat an inherited Organization Policy as risk-reducing only when the constraint, source scope, effective value, and timestamped evaluation evidence are documented.
+- Do not fail a project-local weak setting when an enforced inherited constraint prevents the insecure runtime state, unless an override, tag exception, dry-run-only policy, or unsupported resource path bypasses it.
+- Do not pass a control solely because a parent policy exists when the project has an overriding policy, exception tag, disabled enforcement, or stale Policy Analyzer evidence.
+- Mark as Not Evaluable when only policy names or screenshots are available without effective policy output, hierarchy path, and evaluation timestamp.
+
+#### 9.2 Service Agent Privilege and Exception Gate
+
+Google-managed service agents and service accounts often need broad roles temporarily during product setup, migration, or managed-service operation. Review them explicitly instead of filtering them out as non-human identities.
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Service identity | Principal email, service producer, project number, service name, and creation source |
+| Role binding | Role, scope, inherited source, condition, custom-role permissions, and grant timestamp |
+| Justification | Managed-service requirement, migration ticket, owner, expiry, and least-privilege alternative |
+| Activity evidence | Last use, sensitive permissions used, audit-log method names, and review timestamp |
+| Decision | Required managed identity, time-bound exception, over-privileged, stale grant, or Not Evaluable |
+
+Finding triggers:
+- Google-managed service agent, default service account, or workload service account has `roles/editor`, `roles/owner`, primitive project roles, or broad custom roles without current managed-service justification.
+- A broad service-agent grant is explained as a migration exception but has no expiry, owner, or last-use review.
+- Review excludes `gcp-sa-*`, `developer.gserviceaccount.com`, or default service accounts from privilege analysis even though they can mutate resources, impersonate identities, read data, or administer logging/networking.
+- IAM Conditions are present but do not constrain resource scope, time, request attributes, or service-account impersonation paths relevant to the privileged action.
+
+False-positive guardrails:
+- Do not report a Google-managed service agent solely because its role name is broad when Google documentation or service-specific evidence shows the grant is required, bounded, current, and monitored.
+- Do not treat every default service account as exploitable when it is disabled, unused, has no broad roles/scopes, and has no key or impersonation path.
+
+#### 9.3 Logging Sink, Exclusion, and Data Access Coverage Gate
+
+Audit-log export existence is not enough. Verify whether high-risk events survive sinks, exclusions, retention, and sampled coverage.
+
+| Evidence | Required Fields |
+|----------|-----------------|
+| Audit log configuration | Admin Activity, Data Access, System Event, and Policy Denied status by service |
+| Sink coverage | Sink scope, destination, inclusion filter, writer identity, and excluded child resources |
+| Exclusions | Exclusion name, filter, disabled state, sample fraction, owner, reason, expiry, and affected methods |
+| Sensitive methods | Storage object reads/writes, IAM policy changes, service-account key/impersonation, KMS use, BigQuery reads, secret access |
+| Decision | Covered, partially covered, excluded, sampled below review threshold, retention gap, or Not Evaluable |
+
+Finding triggers:
+- Logging sink exists but excludes sensitive Data Access events such as `storage.objects.get`, service-account impersonation, KMS decrypt/use, BigQuery table reads, or Secret Manager access without compensating evidence.
+- Log exclusions or sampling remove the exact event class needed to verify a high-risk control.
+- Retention is shorter than the review/audit window and there is no downstream archive with integrity and access controls.
+- Sink writer identity cannot write to the destination or the destination is outside the expected security project without ownership evidence.
+
+False-positive guardrails:
+- Do not require Data Access logs for every low-risk development project when a documented scope, cost policy, and compensating telemetry exclude the project from the assessment.
+- Do not fail a sink only because it uses an exclusion; fail it when the exclusion blinds security-relevant events without owner, expiry, or compensating evidence.
+
+---
+
+### Step 10: Compile Assessment Report
 
 
 Produce the final report using the structure defined in the Output Format section.
@@ -117,6 +188,8 @@ Produce the final report using the structure defined in the Output Format sectio
 - Date: <assessment date>
 - Framework: CIS Google Cloud Platform Foundation Benchmark v2.0.0
 - Files reviewed: <list of IaC files>
+- Organization/folder/project scope: <hierarchy or Not Evaluable>
+- Effective evidence cutoff: <timestamp/source>
 
 ### Executive Summary
 - Total CIS recommendations evaluated: <N>
@@ -148,7 +221,28 @@ Produce the final report using the structure defined in the Output Format sectio
 - **Line(s):** <line numbers if applicable>
 - **Description:** <what was found>
 - **Evidence:** <specific configuration or code snippet>
+- **Org Policy Context:** <inherited constraint / project-local policy / exception / dry-run / Not Evaluable>
+- **Service Agent Context:** <managed identity / default service account / workload identity / justification / last-use evidence>
+- **Logging Coverage Context:** <sink/exclusion/retention/Data Access impact when relevant>
 - **Remediation:** <specific fix with code example>
+
+### Organization Policy Inheritance Review
+
+| Scope | Constraint | Local Setting | Effective Policy | Exception/Override | Effective Result | Evidence Timestamp |
+|-------|------------|---------------|------------------|--------------------|------------------|--------------------|
+| <org/folder/project> | <constraint> | <state> | <effective value> | <none/exception> | <pass/fail/not evaluable> | <timestamp> |
+
+### Service Agent Privilege Review
+
+| Principal | Service | Scope | Role/Permissions | Justification/Expiry | Last Use | Effective Risk |
+|-----------|---------|-------|------------------|----------------------|----------|----------------|
+| <service agent> | <service> | <scope> | <role> | <reason/expiry> | <timestamp/none> | <status> |
+
+### Logging Sink and Exclusion Review
+
+| Sink/Scope | Destination | Inclusion Filter | Exclusion/Sampling | Sensitive Events Covered | Retention | Result |
+|------------|-------------|------------------|--------------------|--------------------------|-----------|--------|
+| <sink> | <destination> | <filter> | <none/filter> | <methods> | <days> | <pass/fail/not evaluable> |
 
 ### Prioritized Remediation Plan
 
@@ -194,6 +288,9 @@ Produce the final report using the structure defined in the Output Format sectio
 4. **Cloud SQL authorized_networks vs. private IP.** CIS 6.5 flags `0.0.0.0/0` in authorized networks, but CIS 6.6 goes further and recommends disabling public IP entirely in favor of private networking.
 5. **BigQuery dataset-level vs. table-level CMEK.** CIS 7.2 checks table-level encryption, while CIS 7.3 checks the dataset default. Both should be evaluated independently.
 6. **Default compute service account identification.** The default SA follows the pattern `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. Grep for this pattern, not just the string "default."
+7. **Treating project-local config as effective state.** Organization Policy constraints, folder/project overrides, tag exceptions, and dry-run settings can change the real outcome. Record effective policy evidence before scoring.
+8. **Filtering out service agents.** Google-managed service agents can hold broad roles for managed services or migrations. Review justification, scope, expiry, and last use instead of excluding them as background identities.
+9. **Equating sink existence with audit coverage.** Log sinks can exclude, sample, or miss sensitive Data Access events. Review inclusion filters, exclusions, retention, and destination write health before counting a logging control as covered.
 
 ---
 
@@ -216,7 +313,13 @@ Produce the final report using the structure defined in the Output Format sectio
 - CIS Google Cloud Platform Foundation Benchmark v2.0.0: https://www.cisecurity.org/benchmark/google_cloud_computing_platform
 - Google Cloud Security Best Practices: https://cloud.google.com/security/best-practices
 - Google Cloud IAM Documentation: https://cloud.google.com/iam/docs
+- Google Cloud Organization Policy overview: https://cloud.google.com/resource-manager/docs/organization-policy/overview
+- Google Cloud Organization Policy hierarchy evaluation: https://cloud.google.com/resource-manager/docs/organization-policy/understanding-hierarchy
+- Google Cloud Policy Analyzer for Organization Policy: https://cloud.google.com/policy-intelligence/docs/analyze-organization-policies
+- Google Cloud service account overview: https://cloud.google.com/iam/docs/service-account-overview
+- Google Cloud service account security best practices: https://cloud.google.com/iam/docs/best-practices-service-accounts
 - Google Cloud Audit Logs: https://cloud.google.com/logging/docs/audit
+- Google Cloud Data Access audit log configuration: https://cloud.google.com/logging/docs/audit/configure-data-access
 - Google Cloud VPC Documentation: https://cloud.google.com/vpc/docs
 - Google Cloud SQL Security: https://cloud.google.com/sql/docs/mysql/configure-ssl-instance
 - Terraform Google Provider Documentation: https://registry.terraform.io/providers/hashicorp/google/latest/docs
@@ -225,4 +328,5 @@ Produce the final report using the structure defined in the Output Format sectio
 
 ## Changelog
 
+- **1.0.1** -- Adds effective Organization Policy inheritance, service-agent privilege, and logging sink/exclusion coverage evidence gates.
 - **1.0.0** -- Initial release. Full coverage of CIS Google Cloud Platform Foundation Benchmark v2.0.0 sections 1 through 7.
