@@ -404,33 +404,81 @@ Based on the scope determined in Step 1, evaluate the following additional crite
 
 - Common gaps across PI criteria: No input validation documentation; no reconciliation processes; no output verification procedures; reliance on application logic without independent validation.
 
-### Privacy Criteria (P1.1-P1.8)
+### Privacy Criteria (P1.0-P8.0 Families)
 
-**P1.1 -- Notice: The entity provides notice to data subjects about its privacy practices.**
-- Evidence to look for: Privacy notice/policy (public-facing), cookie consent mechanisms, privacy notice update records.
+Privacy criteria are not a flat `P1.1-P1.8` sequence. Use P1.0 through P8.0 as family headings and report findings against the official criterion rows below. Reject fabricated IDs such as `P1.2`, `P1.3`, `P1.4`, `P1.5`, `P1.6`, `P1.7`, and `P1.8` in auditor-facing output.
 
-**P1.2 -- Choice and Consent: The entity communicates choices available to data subjects regarding the collection, use, and disclosure of personal information.**
-- Evidence to look for: Consent management platform, opt-in/opt-out mechanisms, consent records.
+#### P1.0: Notice and Communication of Objectives Related to Privacy
 
-**P1.3 -- Collection: Personal information is collected consistent with the entity's objectives related to privacy.**
-- Evidence to look for: Data minimization practices, purpose limitation documentation, data inventory.
+**P1.1 -- Notice: The entity provides notice to data subjects about its privacy practices, commitments, and objectives.**
+- Evidence to look for: Privacy notice/policy (public-facing), layered notices, cookie or tracking notices, privacy notice update records, notice publication and approval history.
 
-**P1.4 -- Use, Retention, and Disposal: Personal information is used, retained, and disposed of consistent with the entity's objectives related to privacy.**
-- Evidence to look for: Data retention schedule, automated deletion mechanisms, disposal records.
+#### P2.0: Choice and Consent
 
-**P1.5 -- Access: The entity grants identified and authenticated data subjects the ability to access their stored personal information and provides a mechanism for correcting or updating it.**
-- Evidence to look for: Data subject access request (DSAR) process, self-service portal, DSAR response records.
+**P2.1 -- Choice and Consent: The entity communicates choices available to data subjects and obtains or documents consent for the collection, use, retention, disclosure, and disposal of personal information.**
+- Evidence to look for: Consent management platform, opt-in/opt-out mechanisms, consent records, preference center exports, consent withdrawal records, consent-to-processing mapping.
 
-**P1.6 -- Disclosure and Notification: The entity discloses personal information to third parties with consent and notifies data subjects of breaches and incidents.**
-- Evidence to look for: Third-party data sharing agreements, breach notification procedures, notification records.
+#### P3.0: Collection
 
-**P1.7 -- Quality: The entity collects and maintains accurate, up-to-date, complete, and relevant personal information.**
-- Evidence to look for: Data quality procedures, mechanisms for data subjects to update their information, data validation controls.
+**P3.1 -- Collection: Personal information is collected consistent with the entity's privacy commitments and objectives.**
+- Evidence to look for: Data inventory, collection purpose mapping, intake forms, data minimization records, lawful basis or purpose documentation.
 
-**P1.8 -- Monitoring and Enforcement: The entity monitors compliance with its privacy commitments and procedures and has procedures to address privacy-related complaints.**
-- Evidence to look for: Privacy compliance monitoring procedures, complaint handling process, privacy impact assessments.
+**P3.2 -- Explicit Consent for Collection: When collection requires explicit consent, the entity communicates the need for consent and consequences of not consenting, and obtains consent before collection.**
+- Evidence to look for: Explicit consent records, consent language, sensitive-data collection approvals, refusal/consequence notices, consent-to-collection mapping.
 
-- Common gaps across Privacy criteria: No formal DSAR process; privacy notice does not reflect actual practices; no data retention schedule; no privacy impact assessments conducted.
+#### P4.0: Use, Retention, and Disposal
+
+**P4.1 -- Use: Personal information is used only for the purposes described in privacy commitments and notices.**
+- Evidence to look for: Purpose limitation documentation, data use registers, product analytics approvals, privacy impact assessments, secondary-use review records.
+
+**P4.2 -- Retention: Personal information is retained for no longer than needed to meet stated objectives and legal or contractual requirements.**
+- Evidence to look for: Data retention schedule, retention policy, storage lifecycle rules, record classification, retention exception approvals.
+
+**P4.3 -- Disposal: Personal information is disposed of securely and in accordance with stated retention and disposal commitments.**
+- Evidence to look for: Automated deletion mechanisms, disposal records, deletion job evidence, destruction certificates, backup deletion or expiry evidence.
+
+#### P5.0: Access
+
+**P5.1 -- Access: Data subjects can access personal information held by the entity when required by privacy commitments.**
+- Evidence to look for: DSAR process documentation, identity verification step, self-service portal, access request tickets, response SLA evidence.
+
+**P5.2 -- Correction and update: Data subjects can correct or update personal information when required by privacy commitments.**
+- Evidence to look for: Correction request workflow, update logs, customer support procedures, correction SLA reports, denied-request rationale records.
+
+#### P6.0: Disclosure and Notification
+
+**P6.1 -- Consent Before Disclosure: Personal information is disclosed to third parties with explicit consent when required, and consent is obtained before disclosure.**
+- Evidence to look for: Third-party disclosure inventory, disclosure consent records, consent timing evidence, disclosure purpose mapping.
+
+**P6.2 -- Authorized Disclosure Records: The entity creates and retains complete, accurate, and timely records of authorized disclosures of personal information.**
+- Evidence to look for: Authorized disclosure logs, recipient and purpose registers, vendor export records, sharing approvals, data transfer tickets.
+
+**P6.3 -- Unauthorized Disclosure Records: The entity creates and retains complete, accurate, and timely records of detected or reported unauthorized disclosures, including breaches.**
+- Evidence to look for: Unauthorized disclosure logs, incident records, breach register, evidence of investigation, notification decision records.
+
+**P6.4 -- Third-Party Privacy Commitments: The entity obtains privacy commitments from vendors and other third parties with access to personal information, assesses compliance, and takes corrective action when necessary.**
+- Evidence to look for: Subprocessor DPAs, vendor privacy terms, right-to-audit clauses, vendor assessment records, corrective action evidence.
+
+**P6.5 -- Third-Party Unauthorized Disclosure Notification: Vendors and other third parties commit to notify the entity of actual or suspected unauthorized disclosures, and those notifications are acted on through incident-response procedures.**
+- Evidence to look for: Vendor breach notification clauses, received third-party notification records, incident-response handoff evidence, remediation tracking.
+
+**P6.6 -- Breach and Incident Notification: The entity provides notification of breaches and incidents to affected data subjects, regulators, and others when required.**
+- Evidence to look for: Breach notification playbook, regulator/customer notification templates, incident notification records, notification timing evidence.
+
+**P6.7 -- Data Subject Accounting of Holdings and Disclosures: The entity provides data subjects, upon request, with an accounting of personal information held and disclosures of their personal information.**
+- Evidence to look for: Accounting-of-disclosure request workflow, response records, held-data inventory, disclosure history exports, response SLA evidence.
+
+#### P7.0: Quality
+
+**P7.1 -- Quality: Personal information is accurate, complete, and relevant for the purposes identified in privacy commitments.**
+- Evidence to look for: Data quality procedures, mechanisms for data subjects to update information, validation controls, stale-record review, correction evidence.
+
+#### P8.0: Monitoring and Enforcement
+
+**P8.1 -- Monitoring and Enforcement: The entity monitors compliance with privacy commitments and has procedures to address privacy-related complaints and disputes.**
+- Evidence to look for: Privacy compliance monitoring procedures, complaint handling process, privacy impact assessment follow-up, exception review, enforcement and remediation records.
+
+- Common gaps across Privacy criteria: No formal DSAR process; privacy notice does not reflect actual practices; no data retention schedule; disclosure and notification evidence collapsed into one row; fabricated `P1.x` IDs used instead of official Privacy criterion rows; no privacy impact assessments conducted.
 
 ---
 
@@ -497,13 +545,23 @@ Complete the following matrix for all in-scope criteria:
 | PI1.4    | System output controls                        |       |                                    |
 | PI1.5    | Data storage integrity                        |       |                                    |
 | P1.1     | Privacy notice                                |       |                                    |
-| P1.2     | Choice and consent                            |       |                                    |
-| P1.3     | Data collection                               |       |                                    |
-| P1.4     | Use, retention, and disposal                  |       |                                    |
-| P1.5     | Data subject access                           |       |                                    |
-| P1.6     | Disclosure and notification                   |       |                                    |
-| P1.7     | Data quality                                  |       |                                    |
-| P1.8     | Privacy monitoring and enforcement            |       |                                    |
+| P2.1     | Choice and consent                            |       |                                    |
+| P3.1     | Data collection                               |       |                                    |
+| P3.2     | Explicit consent before collection            |       |                                    |
+| P4.1     | Data use                                      |       |                                    |
+| P4.2     | Data retention                                |       |                                    |
+| P4.3     | Data disposal                                 |       |                                    |
+| P5.1     | Data subject access                           |       |                                    |
+| P5.2     | Data subject correction/update                |       |                                    |
+| P6.1     | Consent before disclosure                     |       |                                    |
+| P6.2     | Authorized disclosure records                 |       |                                    |
+| P6.3     | Unauthorized disclosure records               |       |                                    |
+| P6.4     | Third-party privacy commitments               |       |                                    |
+| P6.5     | Third-party unauthorized disclosure notice    |       |                                    |
+| P6.6     | Breach and incident notification              |       |                                    |
+| P6.7     | Data subject accounting of disclosures        |       |                                    |
+| P7.1     | Data quality                                  |       |                                    |
+| P8.1     | Privacy monitoring and enforcement            |       |                                    |
 ```
 
 ### Aggregate Summary
@@ -511,7 +569,7 @@ Complete the following matrix for all in-scope criteria:
 After scoring, calculate:
 
 - **Overall Readiness Score**: Average of all in-scope criteria scores.
-- **Category Averages**: Average score per TSC category (CC1, CC2, ..., CC9, A1, C1, PI1, P1).
+- **Category Averages**: Average score per TSC category (CC1, CC2, ..., CC9, A1, C1, PI1, Privacy).
 - **Critical Gaps**: Any criteria scored 0 or 1 that are in scope for the audit.
 - **Audit Readiness Assessment**: Score >= 3.0 average indicates likely readiness for examination; below 3.0 requires remediation before engaging an auditor.
 
@@ -560,11 +618,11 @@ After scoring, calculate:
 | C1.1 | Data classification policy; confidential data inventory; classification labeling evidence |
 | C1.2 | Data retention and disposal policy; destruction certificates; automated lifecycle configs |
 | PI1.1-PI1.5 | Processing specifications; input validation rules; reconciliation procedures; output validation; storage integrity controls |
-| P1.1 | Public privacy notice; cookie consent mechanism; privacy notice update records |
-| P1.2 | Consent management platform; opt-in/opt-out mechanisms; consent records |
-| P1.3 | Data minimization practices; purpose limitation documentation; data inventory |
-| P1.4 | Data retention schedule; automated deletion mechanisms; disposal records |
-| P1.5 | DSAR process documentation; self-service portal; DSAR response records |
-| P1.6 | Third-party data sharing agreements; breach notification procedures |
-| P1.7 | Data quality procedures; data subject update mechanisms |
-| P1.8 | Privacy compliance monitoring; complaint handling process; privacy impact assessments |
+| P1.1 | Public privacy notice; layered notices; cookie or tracking notice evidence; privacy notice update records |
+| P2.1 | Consent management platform; opt-in/opt-out mechanisms; consent and withdrawal records |
+| P3.1-P3.2 | Data minimization practices; purpose limitation documentation; data inventory; explicit consent records for collection |
+| P4.1-P4.3 | Data use register; retention schedule; automated deletion mechanisms; disposal records |
+| P5.1-P5.2 | DSAR process documentation; identity verification; self-service portal; access/correction response records |
+| P6.1-P6.7 | Disclosure consent records; authorized and unauthorized disclosure logs; subprocessor DPAs; third-party incident notification clauses and records; breach notification procedures; accounting-of-disclosure responses |
+| P7.1 | Data quality procedures; data subject update mechanisms; validation controls |
+| P8.1 | Privacy compliance monitoring; complaint handling process; privacy impact assessments; exception remediation records |

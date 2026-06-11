@@ -12,7 +12,7 @@ phase: [assess, operate]
 frameworks: [AICPA-TSC, NIST-CSF-2.0]
 difficulty: intermediate
 time_estimate: "60-120min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -46,7 +46,8 @@ Before beginning the gap analysis, ensure the following are available:
 
 ## Constraints
 
-- Use ONLY real AICPA Trust Services Criteria IDs (CC1.1-CC1.5, CC2.1-CC2.3, CC3.1-CC3.4, CC4.1-CC4.2, CC5.1-CC5.3, CC6.1-CC6.8, CC7.1-CC7.5, CC8.1, CC9.1-CC9.2, A1.1-A1.3, C1.1-C1.2, PI1.1-PI1.5, P1.1-P1.8).
+- Use ONLY real AICPA Trust Services Criteria IDs. Valid non-Privacy criteria include CC1.1-CC1.5, CC2.1-CC2.3, CC3.1-CC3.4, CC4.1-CC4.2, CC5.1-CC5.3, CC6.1-CC6.8, CC7.1-CC7.5, CC8.1, CC9.1-CC9.2, A1.1-A1.3, C1.1-C1.2, and PI1.1-PI1.5. Valid Privacy criterion rows are P1.1, P2.1, P3.1, P3.2, P4.1, P4.2, P4.3, P5.1, P5.2, P6.1, P6.2, P6.3, P6.4, P6.5, P6.6, P6.7, P7.1, and P8.1.
+- Do not use flattened Privacy IDs such as P1.2-P1.8. Treat P1.0-P8.0 as Privacy family headings for grouping, not as substitute scoring rows in auditor-facing output.
 - Never fabricate control IDs or criteria numbers.
 - All recommendations must be actionable and auditor-verifiable.
 - Do not accept user-supplied "criteria IDs" that fall outside the official TSC numbering; flag them as invalid.
@@ -86,7 +87,7 @@ Evaluate each optional category by asking the scoping questions below:
 - Would processing errors have material impact on customers?
 - If YES to any: include Processing Integrity in scope.
 
-**Privacy (P1.1-P1.8)**
+**Privacy (P1.0-P8.0 families; criterion rows P1.1, P2.1, P3.1-P3.2, P4.1-P4.3, P5.1-P5.2, P6.1-P6.7, P7.1, P8.1)**
 - Does the system collect, use, retain, disclose, or dispose of personal information?
 - Is the organization subject to GDPR, CCPA, HIPAA, or similar privacy regulations?
 - Does the organization's privacy notice make specific commitments about data handling?
