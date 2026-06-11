@@ -12,7 +12,7 @@ phase: [build, deploy]
 frameworks: [SLSA-v1.0, OWASP-CICD-Top-10]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -49,6 +49,9 @@ The assessment produces a formal report containing a SLSA build level determinat
 - Access to CI/CD configuration files (e.g., `.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, `cloudbuild.yaml`).
 - Access to repository settings context (branch protection rules, environment configurations).
 - Read access to dependency manifests and lock files for supply-chain analysis.
+- Access to platform protection evidence when evaluating GitHub Actions, including environment protection rules, branch protection or rulesets, required checks, required workflows, Actions policy, default `GITHUB_TOKEN` permissions, fork approval settings, and bypass actors.
+
+If platform settings are not available, mark affected controls as `Not Evaluable from Workflow YAML alone` instead of overclaiming pass or fail. Workflow YAML can show that a job declares `environment: production`, but only platform settings prove whether that environment enforces reviewers, wait timers, branch restrictions, protected secrets, or deployment protection rules.
 
 ---
 
@@ -178,6 +181,18 @@ environment:
 
 **Finding format:** Report whether deployments to production require human approval, whether branch protection enforces review requirements, and whether any workflow can bypass flow controls.
 
+**Platform protection evidence gate:**
+
+| Evidence | Required Detail | Applies To |
+|----------|-----------------|------------|
+| Environment protection | Required reviewers, wait timer, deployment branch restrictions, protected environment secrets, custom deployment protection rules | Production/staging jobs using `environment:` |
+| Branch protection / rulesets | Required PR reviews, required status checks, signed commits, linear history, force-push deletion restrictions, bypass actors | Push-to-main or release workflows |
+| Required status checks | Check names, trusted workflow source, branch binding, and whether check names can be spoofed by attacker-controlled workflows | Flow-control and PBAC conclusions |
+| Required workflows | Organization/repository required workflow policy and enforcement scope | Shared security scan or deployment gate claims |
+| Fork approval settings | Whether fork PR workflows require approval and whether secrets are withheld | Public repositories and `pull_request` workflows |
+
+Do not treat `environment: production` as a passing flow-control or PBAC signal unless environment protection evidence is present. If the evidence is missing, report `Not Evaluable from Workflow YAML alone` and list the exact settings needed.
+
 ---
 
 #### CICD-SEC-2: Inadequate Identity and Access Management
@@ -208,6 +223,19 @@ permissions:
 ```
 
 **Finding format:** Report the effective permission model, whether least-privilege is enforced, and whether identity controls (CODEOWNERS, required reviewers) are in place.
+
+**Effective token permission gate:**
+
+Absence of a workflow-level `permissions` block is not automatically confirmed broad write access. Reviewers must record repository or organization default workflow token permissions before assigning severity.
+
+| Evidence | Required Detail |
+|----------|-----------------|
+| Workflow `permissions` | Top-level and job-level permissions blocks, including `write-all`, `id-token: write`, `contents: write`, and omitted blocks |
+| Default token setting | Repository or organization default `GITHUB_TOKEN` permission: read-only or read/write |
+| Actions policy | Whether allowed actions are all, local/GitHub-owned, selected actions, or pinned/allowlisted patterns |
+| Bypass actors | Admins, teams, apps, or bots allowed to bypass branch rules, environments, or required checks |
+
+If default token permissions are read-only, downgrade "missing permissions block" to an auditability finding unless a job or platform setting grants write access elsewhere. Still recommend explicit permissions blocks for reproducibility.
 
 ---
 
@@ -381,6 +409,8 @@ docker.sock
 
 **Finding format:** List all third-party actions, their pinning status (SHA vs. tag vs. branch), and whether an organizational allow-list policy is in place.
 
+**Allowed-actions evidence gate:** Third-party action risk depends on both workflow references and platform policy. Capture whether the repository or organization allows all actions, only GitHub-owned/local actions, selected actions, SHA pinning, or allowlisted patterns. If this evidence is missing, static workflow findings should say `Requires organization/repository Actions policy evidence`.
+
 ---
 
 #### CICD-SEC-9: Improper Artifact Integrity Validation
@@ -450,6 +480,8 @@ on: workflow_run
 
 **Finding format:** Report logging and monitoring coverage, whether pipeline changes are audited, and whether alerting exists for security-relevant events.
 
+**Platform visibility evidence gate:** Logging conclusions require evidence outside workflow YAML when available: audit log retention, workflow run retention, artifact/log retention, deployment audit events, ruleset bypass events, environment approval events, and alert destinations. Mark these controls `Not Evaluable from Config` when settings exports or platform access are missing.
+
 ---
 
 ### Step 4: Compile Assessment Report
@@ -480,6 +512,17 @@ Produce the final report using the following structure:
 | CICD-SEC-2 | Inadequate IAM | ... | ... | ... |
 | ... | ... | ... | ... | ... |
 
+### Platform Protection Evidence
+
+| Area | Observed in Workflow YAML | Requires Repository Settings Evidence | Requires Organization / Enterprise Evidence | Decision |
+|------|---------------------------|---------------------------------------|---------------------------------------------|----------|
+| Environment protection | `environment: production` | required reviewers, wait timer, deployment branches, protected secrets | custom deployment protection rules | Pass / Fail / Partial / Not Evaluable |
+| Branch protection / rulesets | `on.push.branches: [main]` | required reviews/checks, signed commits, bypass actors | org rulesets / required workflows | Pass / Fail / Partial / Not Evaluable |
+| Token permissions | workflow/job `permissions` blocks | default `GITHUB_TOKEN` permission | org Actions defaults | Pass / Fail / Partial / Not Evaluable |
+| Allowed actions | `uses:` references | selected actions / SHA pin policy | org allowlist / required workflows | Pass / Fail / Partial / Not Evaluable |
+| Fork and PR approval | `pull_request` / `pull_request_target` triggers | fork approval and secret exposure settings | enterprise fork policy | Pass / Fail / Partial / Not Evaluable |
+| Retention and auditability | artifact/log upload steps | artifact/log retention, deployment/audit events | enterprise audit log export | Pass / Fail / Partial / Not Evaluable |
+
 ### Detailed Findings
 
 #### [CICD-SEC-X] <Risk Name>
@@ -488,6 +531,9 @@ Produce the final report using the following structure:
 - **File:** <path to relevant config>
 - **Line(s):** <line numbers if applicable>
 - **Description:** <what was found>
+- **Observed in Workflow YAML:** <exact workflow evidence or not present>
+- **Platform Evidence Required:** <environment/ruleset/token/actions/fork/audit settings needed>
+- **Evidence Status:** Confirmed / Missing / Not Evaluable from Workflow YAML alone
 - **Remediation:** <specific fix>
 
 ### Prioritized Remediation Plan
@@ -529,6 +575,7 @@ The final deliverable is a structured assessment report as shown in Step 4 above
 - If no CI/CD configuration files are found, report this as the primary finding and recommend establishing a pipeline configuration.
 - If configurations use a platform not covered by this skill (e.g., a niche CI system), document what was found and note which controls could not be fully evaluated.
 - If file access is denied, record the file path and note the control as "Not Evaluable -- Access Denied."
+- If repository, organization, or enterprise settings are unavailable, separate YAML-observed findings from platform-setting evidence gaps. Do not infer environment protection, branch protection, default token permissions, allowed-actions policy, required workflows, or bypass actor restrictions from workflow YAML alone.
 
 ---
 
@@ -557,4 +604,5 @@ This skill processes user-supplied content including CI/CD configuration files, 
 
 ## Changelog
 
+- **1.0.1** -- Added platform protection evidence gates for GitHub environments, branch protection/rulesets, required checks/workflows, token defaults, allowed-actions policy, fork approval settings, retention, auditability, and bypass actor review.
 - **1.0.0** -- Initial release. Full coverage of SLSA v1.0 build track and OWASP Top 10 CI/CD Security Risks (CICD-SEC-1 through CICD-SEC-10).
