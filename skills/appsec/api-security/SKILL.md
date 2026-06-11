@@ -11,7 +11,7 @@ phase: [design, build, review]
 frameworks: [OWASP-API-Security-2023, OWASP-ASVS]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -43,11 +43,98 @@ Before analyzing any endpoint, establish a complete inventory of the API surface
 
 ---
 
+## Step 1.1: Endpoint Intent Classification
+
+Do not flag every unauthenticated endpoint as an authentication flaw. First classify endpoint intent, data sensitivity, side effects, and caller expectations. Passive public observability endpoints can be intentionally unauthenticated when they disclose only low-sensitivity service status and cannot mutate state.
+
+**Classify every unauthenticated or public endpoint:**
+
+| Intent | Examples | Auth Expectation | Review Decision |
+|---|---|---|---|
+| Passive public health | `GET /health`, `GET /public/health`, `GET /status` returning service status only | Auth optional when no sensitive data, tenant data, dependency details, or state mutation is exposed | Informational or no finding |
+| Public metadata | API docs, public JWKS, public version endpoint | Auth optional if metadata is intentionally public and sanitized | Verify cache/CORS/rate limits |
+| User data read | Account, order, object, tenant, or report retrieval | Auth and object authorization required | Missing auth is High/Critical depending on data |
+| State-changing operation | POST/PUT/PATCH/DELETE, GraphQL mutation, job trigger, export creation | Auth, authorization, CSRF/replay protection where applicable | Missing auth is High/Critical |
+| Trust-boundary ingress | Webhook receiver, inbound callback, partner integration | Source authentication and replay protection required | Missing verification is High |
+| Trust-boundary egress | Async callback, customer-supplied callback URL, webhook sender | Destination allowlist and outbound authenticity required | Missing controls are High when SSRF/spoofing possible |
+
+**Public endpoint false-positive guard:**
+
+Before writing an auth finding for a public endpoint, record whether the endpoint:
+
+- Uses a safe method or read-only resolver with no side effects.
+- Returns only coarse service status, static metadata, or intentionally public data.
+- Avoids tenant identifiers, dependency names, build metadata, stack traces, version banners, secrets, and environment details.
+- Has rate limiting and response-size limits appropriate for public access.
+- Is documented as public and covered by monitoring.
+
+If all conditions pass, do not classify lack of auth as a vulnerability. Record it as "Public by Design" if the report needs audit traceability.
+
+---
+
 ## Steps 2-11: OWASP API Security Top 10:2023 Evaluation (API1-API10)
 
 Evaluate the API against all ten OWASP API Security Top 10:2023 risk categories: Broken Object Level Authorization (BOLA), Broken Authentication, Broken Object Property Level Authorization, Unrestricted Resource Consumption, Broken Function Level Authorization (BFLA), Unrestricted Access to Sensitive Business Flows, Server Side Request Forgery (SSRF), Security Misconfiguration, Improper Inventory Management, and Unsafe Consumption of APIs.
 
 For detailed checklist items with vulnerable code patterns, remediation examples, and review checklists for all ten API risk categories (API1:2023 through API10:2023), see [api-top10-checklist.md](api-top10-checklist.md) in this skill directory.
+
+---
+
+## Webhook Signature Canonicalization Gate
+
+For webhook receivers, "signature header present" is not enough. Verify that the signed material exactly matches what the receiver validates after gateway, reverse proxy, load balancer, framework, and body parser transformations.
+
+**Required evidence:**
+
+- Signature header names, algorithm, key identifier behavior, timestamp header, nonce or event ID, and replay window.
+- Exact signed material: raw body, decoded body, path, query string, method, host, scheme, headers, timestamp, or provider-specific canonical string.
+- Where verification occurs: edge gateway, application middleware, route handler, queue consumer, or worker.
+- Whether reverse proxies rewrite path, scheme, host, port, query parameters, header casing, header duplication, compression, or chunked transfer encoding.
+- Whether the application verifies the raw body before JSON/XML/form parsing mutates whitespace, key order, encoding, or duplicate fields.
+- Whether retries and duplicate delivery are protected by timestamp, nonce/event ID storage, and idempotency handling.
+- Test evidence for a signed valid request, a body-modified request, a path/query-rewritten request, a stale timestamp, and a replayed event.
+
+**Canonicalization review table:**
+
+| Webhook | Signed Material | Proxy Transformations | Verification Point | Replay Controls | Evidence | Decision |
+|---|---|---|---|---|---|---|
+| `<provider/event>` | `<raw body + timestamp>` | `<path/host/query/body changes>` | `<middleware/handler>` | `<timestamp + event ID>` | `<test/log/spec>` | Pass/Fail |
+
+**Finding classification:**
+
+- **High:** Signature verification uses different material than the provider signs, verifies after mutable parsing, ignores proxy rewrites that affect routing/authz, or lacks replay controls on state-changing events.
+- **Medium:** Canonicalization is correct but lacks negative tests for rewrites, stale timestamps, or replay.
+- **Informational:** Signature controls are present and tested, but documentation should record the canonical string and proxy assumptions.
+
+---
+
+## Async Callback Trust Gate
+
+Asynchronous callbacks and job-status notifications create outbound trust boundaries. Customer-supplied callback URLs, partner callback URLs, and retry queues must be reviewed for SSRF, spoofing, replay, and destination drift.
+
+**Required controls for customer-supplied callback destinations:**
+
+- Host allowlist or tenant-owned destination verification. Do not rely on string prefix checks.
+- Scheme restriction to HTTPS unless a documented private-network exception exists.
+- DNS resolution controls that prevent rebinding to localhost, link-local, metadata services, RFC1918 ranges, or internal control-plane hosts unless explicitly approved.
+- Redirect handling that revalidates every hop.
+- Egress proxy, firewall, or network policy enforcement for callback traffic.
+- Timeout, response-size, retry, backoff, and circuit-breaker limits.
+- Outbound request signing such as HMAC, mTLS, signed JWT, or provider-specific signature headers.
+- Replay-safe retry behavior with timestamp, nonce, event ID, or idempotency key.
+- Tenant isolation so one tenant cannot register callback destinations for another tenant's events.
+
+**Callback review table:**
+
+| Callback | Destination Source | Allowlist/Ownership Proof | SSRF Guard | Outbound Auth | Retry Auth | Evidence | Decision |
+|---|---|---|---|---|---|---|---|
+| `<async job status>` | `<customer supplied>` | `<allowlist/verified domain>` | `<DNS/IP/redirect controls>` | `<HMAC/mTLS/JWT>` | `<nonce/idempotency>` | `<test/log/config>` | Pass/Fail |
+
+**Finding classification:**
+
+- **Critical:** Unauthenticated customer-supplied callback URL can reach cloud metadata, localhost, internal admin networks, or tenant data paths.
+- **High:** Customer-supplied callback URLs lack allowlist/ownership proof, DNS rebinding protection, redirect revalidation, or outbound authenticity.
+- **Medium:** Destination controls exist but retry signing, idempotency, or negative SSRF tests are missing.
 
 ---
 
@@ -68,6 +155,8 @@ Each finding produced by this review must include the following fields:
 | **Evidence** | Relevant code snippet or spec excerpt demonstrating the issue |
 | **Remediation** | Specific fix with code example where possible |
 | **Status** | Open, Mitigated, Accepted Risk, False Positive |
+| **Endpoint Intent** | Public by Design, Authenticated Read, State-Changing, Webhook Receiver, Async Callback, or Internal |
+| **Trust Boundary** | External inbound, internal service-to-service, outbound customer/partner callback, or public passive |
 
 ### Severity Definitions
 
@@ -92,7 +181,7 @@ The final review output must be structured as follows:
 **API Style:** [REST / GraphQL / gRPC / Hybrid]
 **Specification:** [OpenAPI spec path, if applicable]
 **Date:** [review date]
-**Reviewer:** AI Agent -- api-security skill v1.0.0
+**Reviewer:** AI Agent -- api-security skill v1.0.1
 
 ### Summary
 
@@ -111,6 +200,22 @@ The final review output must be structured as follows:
 
 **Total Findings:** [count]
 **Critical:** [count] | **High:** [count] | **Medium:** [count] | **Low:** [count] | **Info:** [count]
+
+### Endpoint Intent Review
+
+| Endpoint | Method/Operation | Intent | Auth Decision | False-Positive Guard Evidence |
+|---|---|---|---|---|
+| `/public/health` | GET | Passive public health | Public by Design | No sensitive data, no mutation, rate limited |
+
+### Webhook Canonicalization Review
+
+| Webhook | Signed Material | Proxy Transformations | Verification Point | Replay Controls | Evidence | Decision |
+|---|---|---|---|---|---|---|
+
+### Async Callback Review
+
+| Callback | Destination Source | Allowlist/Ownership Proof | SSRF Guard | Outbound Auth | Retry Auth | Evidence | Decision |
+|---|---|---|---|---|---|---|---|
 
 ### Findings
 
@@ -214,6 +319,19 @@ Unlike REST, where authorization can be enforced per endpoint, GraphQL requires 
 5. **Applying rate limiting only to authentication endpoints.** Every API endpoint requires rate limiting proportional to its cost and sensitivity. Data-heavy endpoints, search functions, and export operations are frequent targets for abuse even when properly authenticated.
 
 6. **Ignoring upstream API trust.** Data received from third-party APIs and even internal microservices must be validated before use. A compromised upstream service can inject SQL, XSS, or SSRF payloads through otherwise trusted data channels.
+
+7. **Treating passive health endpoints as auth failures.** A public read-only health endpoint is not automatically vulnerable. Confirm response sensitivity, mutation behavior, rate limiting, and documentation before creating an authentication finding.
+
+8. **Checking webhook signatures without checking canonicalization.** A receiver can validate a signature over the wrong material if a proxy rewrites path, host, scheme, query, encoding, or body content before verification. Always compare provider-signed material to receiver-verified material.
+
+9. **Missing outbound callback trust.** Async callbacks are not just notifications; they are outbound requests to attacker-influenced destinations when callback URLs are customer supplied. Review allowlists, DNS rebinding controls, redirect revalidation, egress controls, signing, and retry authenticity.
+
+---
+
+## Changelog
+
+- **1.0.1** -- Added endpoint intent classification, webhook signature canonicalization evidence, and async callback destination/authentication controls.
+- **1.0.0** -- Initial release for OWASP API Security Top 10:2023 API reviews.
 
 ---
 
