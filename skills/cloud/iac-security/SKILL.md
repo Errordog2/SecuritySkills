@@ -2,7 +2,7 @@
 name: iac-security
 description: >
   Performs a security review of Infrastructure as Code templates against the OWASP
-  IaC Security Cheat Sheet, SLSA v1.0, and CIS Benchmarks. Auto-invoked when
+  IaC Security Cheat Sheet, SLSA v1.2/latest, and CIS Benchmarks. Auto-invoked when
   reviewing Terraform, CloudFormation, or Pulumi configurations. Detects hardcoded
   secrets, public exposure patterns, encryption gaps, overly permissive IAM, and
   misconfigurations equivalent to Checkov, tfsec, and KICS rules. Produces a
@@ -10,10 +10,10 @@ description: >
 tags: [cloud, iac, terraform, cloudformation]
 role: [cloud-security-engineer, security-engineer, devsecops]
 phase: [build, review]
-frameworks: [OWASP-IaC-Security, SLSA-v1.0, CIS-Benchmarks]
+frameworks: [OWASP-IaC-Security, SLSA-v1.2, CIS-Benchmarks]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -25,7 +25,7 @@ argument-hint: "[target-file-or-directory]"
 
 ## Overview
 
-This skill performs a structured security review of Infrastructure as Code (IaC) templates covering Terraform, CloudFormation, Pulumi, and Bicep. It identifies security anti-patterns, misconfigurations, and policy violations by applying checks equivalent to those performed by static analysis tools (Checkov, tfsec, KICS, cfn-nag) while grounding findings in established frameworks: the OWASP Infrastructure as Code Security Cheat Sheet, SLSA v1.0 supply chain integrity requirements, and relevant CIS Benchmarks.
+This skill performs a structured security review of Infrastructure as Code (IaC) templates covering Terraform, OpenTofu, CloudFormation, Pulumi, and Bicep. It identifies security anti-patterns, misconfigurations, and policy violations by applying checks equivalent to those performed by static analysis tools (Checkov, tfsec, KICS, cfn-nag) while grounding findings in established frameworks: the OWASP Infrastructure as Code Security Cheat Sheet, SLSA v1.2/latest supply chain integrity requirements, and relevant CIS Benchmarks.
 
 The review covers eight security domains: secrets management, public exposure, encryption, IAM and access control, logging, network security, supply chain integrity, and resource hardening. Each finding is mapped to a specific policy rule equivalent from Checkov, tfsec, or KICS.
 
@@ -48,7 +48,7 @@ If a target is provided via arguments, focus the review on: $ARGUMENTS
 
 Infrastructure as Code enables declarative, version-controlled management of cloud resources. This power also means that a single misconfiguration in a template can expose production systems, leak credentials, or create attack surfaces at scale. IaC security scanning is a critical gate in the deployment pipeline.
 
-The OWASP IaC Security Cheat Sheet categorizes common IaC vulnerabilities. SLSA v1.0 provides supply chain integrity requirements relevant to how IaC modules are sourced and deployed. CIS Benchmarks provide the specific configuration baselines against which resource configurations are evaluated.
+The OWASP IaC Security Cheat Sheet categorizes common IaC vulnerabilities. SLSA v1.2/latest provides source and build track concepts relevant to IaC module sourcing, CI-generated plans, provenance, and tamper resistance. CIS Benchmarks provide the specific configuration baselines against which resource configurations are evaluated.
 
 ### Prerequisites
 
@@ -71,6 +71,9 @@ Use Glob to locate all IaC configuration files.
 **/*.tf
 **/*.tfvars
 **/*.tf.json
+**/*.tofu
+**/*.tofu.json
+**/.terraform.lock.hcl
 **/terraform.tfstate
 **/*.tfstate.backup
 **/cloudformation/**/*.yaml
@@ -98,6 +101,42 @@ For detailed tool-specific rule sets, detection patterns, vulnerable code exampl
 
 ---
 
+### Step 9A: Terraform/OpenTofu Supply Chain and State Posture Evidence
+
+Before assigning final severity for Terraform/OpenTofu findings, collect supply-chain and state posture evidence. This prevents false positives on variable references while still catching real state-file and dependency integrity risks.
+
+#### Dependency Lock File and Provider Checksum Gate
+
+- For each root module, determine whether `.terraform.lock.hcl` is committed next to the root `.tf` or `.tofu` files.
+- Compare `required_providers` version constraints with the selected provider versions in `.terraform.lock.hcl`.
+- Verify provider checksums are present for the platforms used by developers and CI runners. If teams use multiple platforms, require evidence that `terraform providers lock` or `tofu providers lock` covered those platforms.
+- Treat a version constraint such as `~> 5.0` without a committed lock file as provider drift risk, not as equivalent to an exact locked provider selection.
+- Check module sources separately from provider locks. Registry module versions, git tags, and immutable commit SHAs have different tamper and rollback properties; floating branches are not immutable pins.
+- Record whether provider lock changes are reviewed in PRs and tied to an intentional upgrade, not silently regenerated by CI.
+
+#### State Posture Gate
+
+- Record state backend type: local file, Terraform Cloud/Enterprise, S3/GCS/AzureRM, Consul, Kubernetes secret, HTTP, or other.
+- Record encryption-at-rest, transport security, access control, state locking, versioning/history, audit logging, and backup/retention evidence.
+- Search for committed `terraform.tfstate`, `*.tfstate.backup`, plan files, and exported state snippets. State and plan files can contain plaintext sensitive values even when input variables are marked `sensitive`.
+- Distinguish a sensitive variable reference from a state exposure. `password = var.db_password` is not a hardcoded secret by itself; the review should shift to state backend, plan artifact, CI log, and variable source handling.
+- Identify state drift between dev, staging, and production backends. A secure production backend does not prove local or lower-environment state files are protected.
+- Record exception owner, expiry, and compensating controls when local state or unlocked state is intentionally used.
+
+#### Severity Calibration
+
+| Scenario | Default Severity | Calibration |
+|---|---|---|
+| Literal credential or committed tfstate/plan containing real secret values | Critical | Usable credentials or sensitive values are exposed. |
+| Sensitive variable reference such as `password = var.db_password` with no exposed value | Informational / Not a finding | Review variable source and state posture instead of reporting a hardcoded secret. |
+| Local or committed state for production or regulated systems | High / Critical | Escalate when state contains secrets, customer data, or privileged infrastructure outputs. |
+| Missing `.terraform.lock.hcl` for Terraform/OpenTofu root modules | Medium | Escalate to High if providers can drift in privileged production deployment paths. |
+| Floating module source (`main`, `master`, unpinned branch) in production IaC | High | Lower only when a documented internal mirror, signed release process, or compensating control prevents drift. |
+| Provider-managed default encryption | Low / Informational | Escalate when regulation, data classification, or policy requires customer-managed keys. |
+| Public `0.0.0.0/0:443` on an internet-facing load balancer | Low / Informational | Do not treat the same as public admin access; verify WAF/TLS/logging context. |
+| Public admin port, database endpoint, or unrestricted all-port ingress | High / Critical | Severity depends on authentication, exposure, data sensitivity, and exploitability. |
+
+Add an evidence note instead of a numbered finding when evidence is complete and the scenario is a calibrated non-issue.
 
 ---
 
@@ -112,8 +151,8 @@ Produce the final report using the structure defined in the Output Format sectio
 | Severity | Definition | Examples |
 |----------|-----------|----------|
 | **Critical** | Immediate exploitability, data exposure, or credential compromise | Hardcoded secrets, public S3 buckets with data, unrestricted ingress on all ports, `*:*` IAM policies, public database endpoints |
-| **High** | Significant misconfiguration that enables attack paths | Missing encryption at rest, security groups open on admin ports, unpinned module sources from public registries, local state files |
-| **Medium** | Control gap reducing defense-in-depth | Missing logging, no CMK encryption (provider-managed only), unpinned provider versions, missing backup retention |
+| **High** | Significant misconfiguration that enables attack paths | Security groups open on admin ports, unpinned module sources from public registries, production local state files, floating privileged provider/module dependencies |
+| **Medium** | Control gap reducing defense-in-depth | Missing logging, missing `.terraform.lock.hcl`, unpinned provider versions, missing backup retention, provider-managed encryption where CMK is not required |
 | **Low** | Hardening opportunity or best-practice deviation | IMDSv1 not disabled, EBS not optimized, missing tags, no VPC for Lambda |
 | **Informational** | Observation with no direct security impact | Deprecated resource types, naming inconsistencies, module structure recommendations |
 
@@ -127,8 +166,8 @@ Produce the final report using the structure defined in the Output Format sectio
 ### Environment
 - Repository: <identifier>
 - Date: <assessment date>
-- IaC Frameworks: <Terraform / CloudFormation / Pulumi / Bicep>
-- Frameworks Applied: OWASP IaC Security Cheat Sheet, SLSA v1.0, CIS Benchmarks
+- IaC Frameworks: <Terraform / OpenTofu / CloudFormation / Pulumi / Bicep>
+- Frameworks Applied: OWASP IaC Security Cheat Sheet, SLSA v1.2/latest, CIS Benchmarks
 - Files reviewed: <N files>
 - Cloud providers: <AWS / Azure / GCP>
 
@@ -166,9 +205,20 @@ Produce the final report using the structure defined in the Output Format sectio
 ### Supply Chain Assessment (SLSA Alignment)
 - Module pinning: <pinned / partially pinned / unpinned>
 - Provider pinning: <pinned / unpinned>
-- State encryption: <encrypted / unencrypted>
-- State locking: <enabled / disabled>
 - Lock file committed: <yes / no>
+- Provider lock checksum coverage: <all CI/dev platforms / current platform only / missing / not applicable>
+- Module source immutability: <commit SHA / version tag / registry version / floating branch / unknown>
+- Plan provenance: <CI generated / local manual / unknown>
+
+### Terraform/OpenTofu State Posture
+- State backend: <local / Terraform Cloud / S3 / GCS / AzureRM / Consul / Kubernetes / HTTP / other>
+- State encryption: <encrypted / unencrypted / unknown>
+- State locking: <enabled / disabled / unknown>
+- State access control: <least privilege / broad / unknown>
+- State versioning/audit logging: <enabled / disabled / unknown>
+- Committed state or plan files: <none / present / unknown>
+- Sensitive values in state/plan evidence: <none / present / not reviewed>
+- Exception owner and expiry: <owner / expiry / not applicable>
 
 ### Prioritized Remediation Plan
 
@@ -192,14 +242,14 @@ Produce the final report using the structure defined in the Output Format sectio
 | Logging | Missing audit trails, disabled monitoring, insufficient retention |
 | Resource Configuration | Missing hardening settings, insecure defaults, deprecated configurations |
 
-### SLSA v1.0 -- Relevant Requirements for IaC
+### SLSA v1.2/latest -- Relevant Requirements for IaC
 
 | Requirement | IaC Application |
 |-------------|----------------|
 | Source integrity | Module sources pinned to immutable references (commit SHA, version tag) |
 | Build integrity | IaC plans generated in CI, not applied manually |
-| Provenance | State files track who applied what changes |
-| Dependencies | Provider and module versions locked, lock file committed |
+| Provenance | CI plan/apply runs produce traceable evidence for who changed what, from which commit, and with which inputs |
+| Dependencies | Provider and module versions locked, `.terraform.lock.hcl` committed, and provider checksums reviewed |
 
 ### Checkov / tfsec / KICS Rule Equivalents
 
@@ -230,6 +280,8 @@ This skill applies checks equivalent to the following high-impact rules:
 5. **Confusing `aws_s3_bucket_acl` with `aws_s3_bucket_public_access_block`.** The public access block overrides ACLs. Check both, but the access block is the stronger control.
 6. **Terraform state file secrets.** Even when variables are marked `sensitive`, they may appear in plaintext in the state file. Verify state encryption and access controls.
 7. **Provider-specific encryption defaults.** Some providers encrypt by default (e.g., AWS S3 since January 2023). Know the defaults before flagging missing explicit encryption configuration.
+8. **Version constraints without lock files.** A provider constraint is not the same as a reviewed provider selection and checksum set. Require `.terraform.lock.hcl` or equivalent OpenTofu lock evidence.
+9. **One-size-fits-all exposure severity.** Internet-facing HTTPS for a load balancer is different from public SSH, database, or all-port ingress. Calibrate severity to protocol, role, authentication, and data sensitivity.
 
 ---
 
@@ -252,7 +304,11 @@ This skill applies checks equivalent to the following high-impact rules:
 ## References
 
 - OWASP Infrastructure as Code Security Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Infrastructure_as_Code_Security_Cheat_Sheet.html
-- SLSA v1.0 Specification: https://slsa.dev/spec/v1.0/
+- SLSA v1.2 Specification: https://slsa.dev/spec/v1.2/
+- SLSA Latest Specification: https://slsa.dev/spec/latest/
+- Terraform Dependency Lock File: https://developer.hashicorp.com/terraform/language/files/dependency-lock
+- Terraform providers lock command: https://developer.hashicorp.com/terraform/cli/commands/providers/lock
+- OpenTofu Dependency Lock File: https://opentofu.org/docs/language/files/dependency-lock/
 - CIS Benchmarks: https://www.cisecurity.org/cis-benchmarks
 - Checkov Policy Index: https://www.checkov.io/5.Policy%20Index/
 - tfsec Documentation: https://aquasecurity.github.io/tfsec/
