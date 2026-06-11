@@ -12,7 +12,7 @@ phase: [build, deploy]
 frameworks: [OWASP-Top-10-2021, OWASP-Testing-Guide-v4.2]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -42,6 +42,8 @@ If a target is provided via arguments, focus the review on: $ARGUMENTS
 ## Context
 
 DAST tools test running applications by sending crafted HTTP requests and analyzing responses for vulnerability indicators. Unlike SAST, DAST finds runtime issues: misconfigured headers, authentication flaws, and injection vulnerabilities that survive to deployment. OWASP Testing Guide v4.2 (WSTG) defines 91 test cases across 11 categories -- DAST tools automate a subset of these. OWASP Top 10:2021 provides the risk-based prioritization framework. The challenge is configuration: an unconfigured DAST scan produces noise (thousands of informational findings), misses authenticated surfaces, and may destabilize target environments. Proper tuning transforms DAST from a checkbox exercise into a meaningful security gate.
+
+Before judging the configuration, record the declared scan scope: public-only exposure check, authenticated application scan, API scan, full active scan, or scheduled regression scan. A deliberately unauthenticated public-page scan can be valid when its scope is narrow and explicit; it should not be reported as an authentication failure unless the intended scope includes authenticated surfaces.
 
 ---
 
@@ -326,8 +328,26 @@ env:
 - [ ] Test user has sufficient permissions to access the application's full attack surface.
 - [ ] Test user does NOT have admin privileges (test with realistic user role).
 - [ ] Session management is configured (ZAP re-authenticates when logged-out indicator is detected).
+- [ ] Authenticated crawl evidence proves the scanner stayed logged in for the scan window.
+- [ ] Private/authenticated URLs, forms, and API routes appear in the discovered URL inventory.
+- [ ] CSRF token, SameSite cookie, MFA bypass/test-mode, and session-renewal assumptions are current for this release.
 
-**Finding classification:** No authenticated scanning is **Critical** (misses most of the attack surface). Authentication configured but verification regex is absent or too broad is **High**. Hardcoded credentials in scan configuration is **High**.
+#### 4.2 Authenticated Crawl Provenance
+
+Authenticated DAST often fails silently: the login macro succeeds once, the scanner loses the session, and the report still looks complete because public pages return HTTP 200. Require evidence that the scan was authenticated throughout the crawl before giving credit for authenticated coverage.
+
+| Evidence | Required Detail | Failure Mode Caught |
+|----------|-----------------|---------------------|
+| Declared auth scope | Roles, tenants, URL patterns, APIs, and user journeys intended for authenticated scanning | Public-only scan mistaken for full auth coverage |
+| Login macro freshness | Last update date, owner, linked test user, CSRF/MFA assumptions, and release compatibility | Reused macro breaks after login flow changes |
+| Session verification | Logged-in and logged-out regex, verification interval, cookie/session renewal behavior | Scanner silently downgrades to anonymous crawl |
+| Crawled private surface | Auth-only URLs, forms, API routes, and response markers found during the scan | Report contains only login/public pages |
+| Auth failure evidence | Count of 401/403/302-to-login responses, logout events, verification failures, and reauth attempts | Blocked requests counted as successful coverage |
+| Role coverage | Which roles were scanned and which sensitive workflows remain manual/out-of-scope | Single low-privilege role treated as complete testing |
+
+**Authenticated coverage gate:** Do not report authenticated scanning as present based only on auth configuration blocks. Require scan artifacts showing successful login, session persistence, and discovered authenticated resources. If the declared scope is public-only, mark authenticated coverage as `Not applicable` and record the scope decision instead of filing a false positive.
+
+**Finding classification:** No authenticated scanning for an intended authenticated scan is **Critical** (misses most of the attack surface). Authentication configured but verification regex is absent or too broad is **High**. Authenticated scan claimed without crawl provenance is **High**. Hardcoded credentials in scan configuration is **High**.
 
 ---
 
@@ -403,8 +423,26 @@ jobs:
 - [ ] `fail_action` is set appropriately (baseline: warn; full: error for high/critical).
 - [ ] Target application is ephemeral or restorable (active scanning may modify data).
 - [ ] Scan duration has a timeout to prevent pipeline stalls.
+- [ ] WAF, bot-control, CAPTCHA, rate-limit, and block-page responses are detected and reported separately from application success responses.
+- [ ] Scanner concurrency, request rate, retry policy, and user-agent/header profile fit the target environment's anti-automation limits.
+- [ ] Reports preserve evidence for blocked requests, throttle responses, and forced logout events.
 
-**Finding classification:** No DAST in CI/CD is **High**. Active scanning targeting production is **Critical**. No passive scanning on PRs is **Medium**. ZAP action unpinned is **Medium**.
+#### 5.2 Anti-Automation and WAF Boundary Review
+
+Anti-automation controls can invalidate DAST results by blocking scanner traffic, serving challenge pages, returning generic 200 responses, or forcing logout. Treat those controls as scan-quality boundaries rather than normal application behavior.
+
+| Boundary | Evidence to Capture | Review Question |
+|----------|--------------------|-----------------|
+| WAF / bot-control mode | Policy name, environment, action, sampled block logs, response fingerprint | Were scanner requests blocked or challenged? |
+| Rate limit | Allowed request rate, scanner concurrency, retry/backoff settings, 429/403 trend | Did throttling hide endpoints or collapse coverage? |
+| Challenge page | CAPTCHA, JavaScript challenge, device fingerprinting, or bot page marker | Did the report parse a block page as a valid response? |
+| Session interruption | Forced logout, CSRF rotation, token expiry, or stale cookie reuse | Did auth coverage degrade mid-scan? |
+| Allowlisted scanner identity | Source IP, user agent, test account, header marker, and approval ticket | Is the exception narrow and auditable? |
+| Evidence disposition | Blocked, challenged, bypassed-for-test, or intentionally in-scope | Is the scan result trustworthy for the declared scope? |
+
+**Anti-automation gate:** If WAF or bot controls block, challenge, throttle, or rewrite scanner responses, classify coverage as partial until the report proves the blocked paths were retested with an approved test boundary or documented as out-of-scope.
+
+**Finding classification:** No DAST in CI/CD is **High**. Active scanning targeting production is **Critical**. No passive scanning on PRs is **Medium**. ZAP action unpinned is **Medium**. Scanner reports that treat WAF/bot-control block pages as successful coverage are **High**.
 
 ---
 
@@ -513,12 +551,27 @@ DAST tools report findings per-URL, producing hundreds of duplicate alerts for t
 
 | Setting | Status | Evidence |
 |---------|--------|---------|
+| Declared scan scope | Public-only / Authenticated / API / Full active | <scope statement and owner> |
 | Authenticated scanning | Yes/No | <auth method> |
+| Authenticated crawl provenance | Complete/Partial/None/Not applicable | <private URLs discovered, session verification, auth failure counts> |
 | Scope restrictions | Yes/No | <include/exclude paths> |
 | Passive scanning in CI | Yes/No | <workflow file> |
 | Active scanning (staging) | Yes/No | <workflow file> |
 | API scanning | Yes/No | <OpenAPI/GraphQL import> |
+| Anti-automation boundary review | Clear/Blocked/Challenged/Throttled/Unknown | <WAF, bot-control, rate-limit, or block-page evidence> |
 | Results deduplication | Yes/No | <dedup method> |
+
+### Authenticated Crawl Provenance
+
+| Role / User | Intended Surface | Login Evidence | Private Resources Crawled | Auth Failures | Session Persistence | Coverage Decision |
+|-------------|------------------|----------------|---------------------------|---------------|---------------------|-------------------|
+| <test-user> | <URLs/APIs/workflows> | <login marker + timestamp> | <count/examples> | <401/403/login redirects> | <verification interval/result> | <covered/partial/not covered> |
+
+### Anti-Automation Boundary Evidence
+
+| Control | Response Evidence | Scanner Setting | Impact on Coverage | Decision |
+|---------|-------------------|-----------------|--------------------|----------|
+| <WAF/bot/rate-limit> | <403/429/challenge/body marker/log sample> | <concurrency/user-agent/source IP> | <blocked/challenged/throttled/none> | <adjust/retest/out-of-scope> |
 
 ### Findings
 
@@ -584,6 +637,12 @@ DAST tools report findings per-URL, producing hundreds of duplicate alerts for t
 
 5. **Running only scheduled weekly scans instead of integrating into CI.** Weekly scans create a feedback loop measured in days. Passive baseline scans in CI (on every PR) give developers immediate feedback on security header regressions and configuration issues, while weekly full scans provide comprehensive active testing coverage.
 
+6. **Mistaking public-only scans for failed authenticated scans.** A passive public exposure check can be legitimate when the scope is explicit. Record declared scope first, then judge whether authenticated crawl evidence is required.
+
+7. **Assuming auth configuration means authenticated coverage.** Login scripts, CSRF tokens, MFA test modes, and session checks drift. Require scan artifacts proving private URLs were crawled while the logged-in marker remained valid.
+
+8. **Ignoring WAF and anti-bot interference.** Block pages, JavaScript challenges, throttling, and forced logouts can make reports look clean while the scanner never reached the application. Capture boundary evidence and retest or scope it explicitly.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -614,4 +673,5 @@ This skill processes DAST configuration files that may contain target URLs, auth
 
 ## Changelog
 
+- **1.0.1** -- Added declared-scope handling, authenticated crawl provenance gates, and WAF/anti-automation boundary evidence requirements.
 - **1.0.0** -- Initial release. Full coverage of DAST configuration review against OWASP Top 10:2021 and OWASP Testing Guide v4.2, with ZAP-specific patterns.
