@@ -13,7 +13,7 @@ phase: [build, operate]
 frameworks: [OWASP-Secrets-Management, NIST-SP-800-57-Part1-Rev5]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -173,7 +173,32 @@ Before flagging a detected string as a hardcoded secret, apply these verificatio
    - Infrastructure misconfigurations unrelated to secrets (e.g., public S3 buckets, debug mode, public database endpoints) — these belong to other skills
 5. **Scope to the skill's domain.** Only report findings where a secret (credential, key, token, certificate) is actually present in the file. General security misconfigurations, missing best practices, and architectural gaps should be noted in the Prioritized Remediation Plan section, not as numbered findings.
 
-#### 2.3 Detection Tool Configuration Review
+#### 2.3 Environment Scope and Credential Exposure Severity
+
+Not every detected credential carries the same risk. Before assigning severity, record the environment, scope, network reachability, rotation period, and allowed consumers. A sandbox-only credential with tight CI runner scoping and short rotation is not equivalent to a production credential embedded in a public application path.
+
+**Scope-aware severity evidence:**
+
+| Field | Evidence to Record |
+|-------|--------------------|
+| Environment | Production, staging, sandbox, local development, test fixture, CI-only, or unknown |
+| Data access | Production data, synthetic data, test tenant, public resource, or unknown |
+| Network scope | Internet-reachable, private network, CI runner IP allowlist, VPN-only, localhost-only, or unknown |
+| Principal scope | Read-only, write, admin, deploy, break-glass, or unknown |
+| Rotation period | Dynamic, <=30 days, <=90 days, >90 days, never, or unknown |
+| Storage path | Source code, config, CI secret store, vault, telemetry, artifact, container layer, or unknown |
+| Consumer inventory | Known services/jobs using the secret, owner, and decommission status |
+
+**Severity adjustment rules:**
+
+- **Downgrade or close as false positive** when the value is a sandbox/test credential, data access is synthetic or isolated, network access is restricted to CI runners or localhost, rotation is <=30 days, and no production path can consume it.
+- **Keep High/Critical** when environment, data access, or consumer inventory is unknown and the value matches a live provider format or grants write/admin privileges.
+- **Raise severity** when a test/sandbox credential can access production-like data, shared infrastructure, billing, deployment, customer messaging, or public cloud control planes.
+- **Do not display secret values.** Record only secret type, environment, scope evidence, and redacted identifiers such as prefix category or last four characters when needed for correlation.
+
+---
+
+#### 2.4 Detection Tool Configuration Review
 
 Verify that at least one secret detection tool is configured and integrated:
 
@@ -193,6 +218,37 @@ Verify that at least one secret detection tool is configured and integrated:
 - Allowlist entries are documented with justification (false positive suppression must not create blind spots).
 
 **Finding classification:** No secret detection tooling deployed is **Critical**. Detection in CI only (no pre-commit) is **Medium**. Excessive allowlist entries without justification is **Medium**.
+
+---
+
+### Step 2.5: Telemetry, Trace, Metrics, and Artifact Secret Egress
+
+Secret exposure often happens outside source files. Review observability and delivery paths that can copy secrets into logs, traces, metrics, analytics events, crash reports, build artifacts, test snapshots, browser telemetry, or support bundles.
+
+**Telemetry paths to inspect:**
+
+- Application logs, structured logger fields, request/response logging, and exception handlers.
+- Distributed tracing attributes and baggage, including OpenTelemetry span attributes such as `db.password`, `http.request.header.authorization`, or custom auth fields.
+- Metrics labels/tags, exemplars, and high-cardinality dimensions such as `api_key_last4`, tenant tokens, or credential usernames.
+- CI logs, workflow summaries, test reports, screenshots, Playwright traces, coverage reports, and build artifacts.
+- Error reporting, crash dumps, APM events, session replay, analytics, and customer support exports.
+- Container image layers, package artifacts, SBOM metadata, provenance attestations, and release bundles.
+
+**Telemetry review table:**
+
+| Sink | Secret Field/Type | Redaction Point | Egress Destination | Retention | Evidence | Decision |
+|------|-------------------|-----------------|--------------------|-----------|----------|----------|
+| `<trace/log/metric>` | `<type only>` | `<logger/filter/exporter>` | `<SIEM/APM/vendor>` | `<days>` | `<config/test>` | Pass/Fail |
+
+**What to verify:**
+
+1. Redaction happens before data leaves the process or collector, not only in the UI.
+2. Header and body redaction covers aliases such as `Authorization`, `X-API-Key`, `Cookie`, `Set-Cookie`, `db.password`, `token`, `secret`, and provider-specific names.
+3. Traces, metrics labels, and analytics attributes have denylist and allowlist controls, not only log redaction.
+4. CI and test artifacts do not store raw environment variables, generated `.env` files, or secret-bearing screenshots/traces.
+5. Telemetry vendors, SIEMs, and support tools have retention and access controls aligned with secret exposure risk.
+
+**Finding classification:** Raw secrets in logs, traces, metrics, or artifacts are **High** and **Critical** when production credentials are externally exported or broadly accessible. Partial redaction that leaves stable identifiers such as last-four values in metrics is **Medium** unless it enables credential correlation or brute-force narrowing.
 
 ---
 
@@ -300,6 +356,37 @@ NIST SP 800-57 Part 1 Rev 5 Table 1 defines recommended cryptoperiods by key typ
 
 ---
 
+#### 4.3 Secret Age, Ownership, and Consumer Inventory Gate
+
+A secret stored in Vault, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, or another centralized store is not automatically safe. Review age, owner, consumer inventory, and rotation impact before downgrading risk based on storage location.
+
+**Required evidence for stored secrets:**
+
+- Secret path or logical name, redacted if needed.
+- Secret type and privilege class.
+- Environment and data scope.
+- Creation date and last rotation date.
+- Rotation schedule or cryptoperiod.
+- Owner/team and on-call or break-glass contact.
+- Known consumers, including services, jobs, CI workflows, agents, and third-party integrations.
+- Last access or usage evidence where the platform provides it.
+- Rotation test evidence, including whether every consumer has been redeployed or can fetch the new version dynamically.
+
+**Age and consumer inventory table:**
+
+| Secret Path/Name | Type | Environment | Last Rotated | Max Age | Owner | Consumers Known | Last Access | Decision |
+|------------------|------|-------------|--------------|---------|-------|-----------------|-------------|----------|
+| `<redacted path>` | `<type>` | `<env>` | `<date>` | `<days>` | `<team>` | Yes/No | `<date/unknown>` | Pass/Fail |
+
+**Decision rules:**
+
+- **High:** Production or privileged secret exceeds 180 days without rotation, has unknown consumers, or has no owner.
+- **Medium:** Secret is vaulted but last access, owner, consumer list, or rotation validation is missing.
+- **Low/Informational:** Short-lived or dynamic secret with known owner, known consumers, monitored rotation, and documented last access.
+- **Not Evaluable:** Vault location is known but age, owner, or consumer evidence is unavailable. Do not downgrade severity solely because the secret is vaulted.
+
+---
+
 ### Step 5: Agent-Specific Secrets Management
 
 For agentic systems (AI agents, automation bots, CI/CD agents), evaluate credential handling patterns.
@@ -357,8 +444,8 @@ spec:
 | Severity | Definition |
 |----------|-----------|
 | **Critical** | Committed secrets in current codebase or git history (unrotated); no secret detection tooling; .env with production credentials committed. |
-| **High** | No centralized secrets manager; no rotation automation; long-lived static credentials for agents; secrets in CI logs; no git history scanning; audit logging disabled on vault. |
-| **Medium** | Detection in CI only (no pre-commit); manual rotation process; excessive detection allowlists; token TTL mismatch; rotation not monitored; plaintext secrets in environment variables (vs. vault injection). |
+| **High** | No centralized secrets manager; no rotation automation; long-lived static credentials for agents; secrets in CI logs; no git history scanning; audit logging disabled on vault; production telemetry exports raw secrets; stale privileged secrets with unknown consumers. |
+| **Medium** | Detection in CI only (no pre-commit); manual rotation process; excessive detection allowlists; token TTL mismatch; rotation not monitored; plaintext secrets in environment variables (vs. vault injection); incomplete telemetry redaction coverage; vaulted secrets missing owner, age, or consumer evidence. |
 | **Low** | Missing secret type documentation; secret naming convention inconsistencies; development-only secrets in non-.gitignored example files. |
 
 ---
@@ -388,6 +475,21 @@ spec:
 | DB credentials | Vault dynamic | On-demand | Yes | N/A (dynamic) |
 | API key (Stripe) | AWS SM | 90 days | Yes | 2024-01-15 |
 | TLS cert | cert-manager | 60 days | Yes | Auto |
+
+### Environment and Scope Evidence
+
+| Secret Type | Environment | Data Access | Network Scope | Principal Scope | Rotation Period | Consumer Inventory | Severity Decision |
+|-------------|-------------|-------------|---------------|-----------------|-----------------|-------------------|-------------------|
+
+### Telemetry Secret Egress Review
+
+| Sink | Secret Field/Type | Redaction Point | Egress Destination | Retention | Evidence | Decision |
+|------|-------------------|-----------------|--------------------|-----------|----------|----------|
+
+### Secret Age and Consumer Inventory
+
+| Secret Path/Name | Type | Environment | Last Rotated | Max Age | Owner | Consumers Known | Last Access | Decision |
+|------------------|------|-------------|--------------|---------|-------|-----------------|-------------|----------|
 
 ### Findings
 
@@ -442,6 +544,12 @@ spec:
 
 4. **Ignoring secret sprawl across multiple secrets managers.** Large organizations often have Vault, AWS Secrets Manager, Azure Key Vault, and application-specific secret stores running simultaneously. Without a unified inventory, secrets expire unmonitored and rotation gaps emerge. Maintain a single source of truth for secret metadata (type, owner, rotation schedule, storage location).
 
+5. **Treating all test credentials as production leaks.** A tightly scoped sandbox secret with synthetic data, CI runner IP allowlisting, and short rotation may be a low-severity finding or false positive. Record scope evidence before assigning severity.
+
+6. **Redacting logs but not traces or metrics.** Observability pipelines often copy secrets into span attributes, metric labels, crash reports, and test artifacts after application log redaction has already succeeded. Review every telemetry egress path.
+
+7. **Assuming vault storage equals safe.** Vaulted secrets still become risky when stale, unowned, broadly privileged, or consumed by unknown services. Require age, owner, consumer inventory, and rotation validation evidence.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -471,5 +579,6 @@ This skill processes configuration files and code that may contain secret values
 
 ## Changelog
 
+- **1.0.2** -- Add environment/scope-aware severity, telemetry egress review, and secret age/owner/consumer inventory evidence gates.
 - **1.0.1** -- Add false positive filtering guidance: distinguish real secrets from placeholders/examples, verify entropy, scope findings to actual secrets (not architectural gaps).
 - **1.0.0** -- Initial release. Full coverage of OWASP Secrets Management Cheat Sheet and NIST SP 800-57 Part 1 Rev 5 for secrets management review.
