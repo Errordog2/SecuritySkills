@@ -94,6 +94,20 @@ Zero Trust is an architectural approach, not a product. NIST SP 800-207 defines 
 | **ID Management** | Enterprise identity provider and credential management |
 | **SIEM** | Aggregated security telemetry for monitoring and response |
 
+#### PDP / PA / PEP Decision Traceability
+
+For every representative access path, collect evidence that the decision can be traced from policy evaluation to enforcement. If the organization cannot reconstruct why an allow or deny happened, classify the gap under Visibility and Analytics as well as the affected pillar.
+
+| Trace point | Evidence to request | Failing condition |
+|---|---|---|
+| Policy Decision Point / Policy Engine | Sample allow and deny decisions, policy version, subject identity, device posture, risk score, resource, data classification | Decisions are not logged, omit inputs, or cannot be tied to a policy version |
+| Policy Administrator | Session grant/revoke event, token or route issuance, TTL, change ticket or automation event | PA actions cannot be linked back to the PE/PDP decision |
+| Policy Enforcement Point | Gateway/proxy/agent log showing enforcement result, connection ID, subject, resource, and deny reason | PEP logs only network metadata or cannot prove the decision was enforced |
+| Policy drift checks | Policy-as-code diff, deployment status, rollback record, stale policy detection | Runtime policy differs from approved policy without alerting |
+| Outage mode | Fail-open/fail-closed behavior, break-glass path, emergency approval evidence | Enforcement bypass is undocumented or silently fail-open for sensitive resources |
+
+Do not treat a dashboard screenshot alone as sufficient evidence. Prefer immutable logs, policy repository commits, test decisions, and time-correlated PE/PA/PEP events.
+
 ### CISA Zero Trust Maturity Model v2.0 — Five Pillars and Maturity Stages
 
 | Pillar | Scope |
@@ -153,9 +167,38 @@ ZT-ID-07: Service/workload identities not governed (no identity for machines)
 ZT-ID-08: No identity threat detection (compromised credential detection)
 ZT-ID-09: Federation trust not validated — implicit trust of partner IdPs
 ZT-ID-10: Session management lacks continuous evaluation (no CAE or equivalent)
+ZT-ID-11: Privileged and break-glass access lacks JIT approval, device controls, or post-use rotation
+ZT-ID-12: Service identity evidence is missing for CI/CD, mesh, serverless, or machine clients
 ```
 
 ---
+
+#### Service and Workload Identity Evidence Matrix
+
+Use this matrix when assessing `ZT-ID-07`, `ZT-ID-12`, `ZT-NET-04`, and `ZT-APP-09`. Treat every service, job, workload, and machine identity as a first-class subject in the zero trust decision, not as a trusted network location or shared secret.
+
+| Workload type | Evidence to collect | Decision gate |
+|---|---|---|
+| Kubernetes workloads | ServiceAccount bindings, projected token audience, RBAC role bindings, namespace boundaries, admission policy | Each workload has a unique identity and cannot use the default namespace identity for privileged calls |
+| Cloud workloads | IAM role/service account assignment, trust policy, resource policy, short-lived credential path, audit logs | Workload access is scoped to specific resources and tied to runtime identity, not static access keys |
+| CI/CD jobs | OIDC trust policy, runner identity, environment protection, deployment approval, artifact attestation | Build and deploy identities are separated and cannot mint production credentials without policy approval |
+| Service mesh / SPIFFE | SVID issuance, workload selector, mTLS policy, certificate rotation, identity-to-policy mapping | Service-to-service traffic is authenticated with workload identity and policy denies unknown identities |
+| Serverless functions | Function role, event source permissions, secret access policy, per-function logging | Each function has least-privilege access and no shared admin execution role |
+| Machine-to-machine clients | Client credential inventory, rotation evidence, owner, scope, last-used telemetry | Long-lived shared credentials have an owner, expiry, rotation path, and compensating monitoring |
+
+Flag exceptions where a default, shared, or environment-wide identity can reach sensitive resources. Require an explicit exception owner, expiry, compensating control, and audit trail before scoring the capability above Initial maturity.
+
+#### Privileged and Break-Glass Access Evidence
+
+Assess emergency and privileged access paths separately from standard user access. A zero trust program is not mature if production access becomes broad, unaudited, or permanent during incidents.
+
+| Control | Evidence to collect | Failing condition |
+|---|---|---|
+| Privileged access workstation / hardened admin device | Device compliance policy, admin group scope, conditional access rule, EDR status | Admin access allowed from unmanaged or unknown devices |
+| Phishing-resistant MFA | FIDO2/WebAuthn, smart card, certificate-backed auth, step-up policy | Privileged actions allowed with password-only, SMS, or shared OTP paths |
+| Just-in-time elevation | Approval ticket, elevation request, TTL, entitlement scope, revocation event | Standing admin access exists without time limit or business justification |
+| Session and command logging | PIM/PAM session record, command transcript, resource logs, SIEM correlation | Admin actions cannot be reconstructed after the event |
+| Break-glass lifecycle | Named owner, sealed credential process, test record, post-use rotation/disablement | Emergency accounts are untested, shared, or left enabled after use |
 
 ### Step 2: Pillar 2 — Devices
 
@@ -319,6 +362,7 @@ ZT-VIS-02: SIEM deployed but not correlating cross-pillar signals
 ZT-VIS-03: No UEBA (User and Entity Behavior Analytics)
 ZT-VIS-04: Mean time to detect (MTTD) not measured or exceeds 24 hours
 ZT-VIS-05: No unified dashboard for zero trust posture across pillars
+ZT-VIS-06: PDP/PA/PEP decisions cannot be reconstructed from versioned policy and enforcement logs
 ```
 
 #### Automation and Orchestration
@@ -351,6 +395,20 @@ ZT-GOV-05: Regulatory zero trust mandates not tracked (OMB M-22-09 for federal)
 | **High** | Major pillar at Traditional maturity with exploitation potential | No microsegmentation; VPN as sole remote access; no DLP |
 | **Medium** | Pillar at Initial maturity or cross-cutting capability gap | Partial ZTNA deployment; SIEM without cross-pillar correlation |
 | **Low** | Pillar at Advanced seeking Optimal or process improvement | Missing automation; governance documentation gaps |
+
+### Public Resource Severity Calibration
+
+Do not classify anonymous access to intentionally public resources as High solely because user authentication is absent. Calibrate severity based on the resource classification, administrative plane exposure, and integrity risk.
+
+| Public resource pattern | Required evidence | Severity guidance |
+|---|---|---|
+| Public docs, status pages, marketing sites, static downloads | Public data classification, no session cookies or personal data, cache policy, origin access control | Low or informational if publishing/admin controls are separate and hardened |
+| Public APIs or unauthenticated health endpoints | Explicit unauthenticated contract, rate limits, response schema, no sensitive metadata, abuse monitoring | Medium if abuse, enumeration, or metadata exposure is possible |
+| Public object storage or CDN buckets | Inventory owner, allowed object prefixes, write protection, integrity/deployment controls | High only when sensitive data, writable objects, or private-origin bypass is present |
+| Public demo or sandbox tenants | Data reset process, tenant isolation, fake data controls, account takeover boundaries | Severity follows impact to real accounts, data, or production control planes |
+| Publishing/admin plane for public content | MFA, device posture, JIT elevation, audit logs, approval workflow | Keep strict severity for weak admin controls even when the published resource is public |
+
+State the expected public behavior before assigning severity. A finding should distinguish "public by design with weak admin controls" from "unintended public exposure of protected resources."
 
 ---
 
@@ -399,6 +457,12 @@ ZT-GOV-05: Regulatory zero trust mandates not tracked (OMB M-22-09 for federal)
 
 ### Detailed Findings
 [Findings by pillar with framework references]
+
+### Evidence Gates
+- Service/workload identity matrix: [covered workload types, missing identities, exceptions, owners, expiry]
+- PDP/PA/PEP decision traceability: [sample allow/deny decision, policy version, PA action, PEP log, drift/outage behavior]
+- Privileged and break-glass access: [JIT approval, hardened device requirement, session logging, post-use rotation]
+- Public resource calibration: [public-by-design resources, admin plane controls, data classification, final severity rationale]
 
 ### Zero Trust Roadmap
 - Phase 1 (0-6 months): [quick wins, critical gaps]
