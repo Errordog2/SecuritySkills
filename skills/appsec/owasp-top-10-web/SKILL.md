@@ -51,6 +51,14 @@ This skill operationalizes all ten categories into a repeatable, structured revi
 3. Catalog entry points: routes, controllers, API endpoints, middleware chains, and static asset serving.
 4. Note dependency manifests (`package.json`, `requirements.txt`, `pom.xml`, `Gemfile.lock`, `go.sum`, etc.) for component analysis.
 
+**Long-lived channel inventory gate:** Also catalog WebSocket upgrade handlers, Socket.IO namespaces, Server-Sent Events (SSE), long-polling fallbacks, GraphQL subscriptions, and client-side `new WebSocket()` / `EventSource()` calls. These entry points often bypass ordinary HTTP route middleware, CORS preflight reasoning, per-request rate limits, and request-scoped session checks.
+
+Use `Grep` for:
+
+```
+server\.on\(['"]upgrade|new WebSocketServer|socket\.io|io\.on\(['"]connection|@ServerEndpoint|WebSocketGateway|text/event-stream|EventSource|new WebSocket|ws://|wss://|graphql.*subscription|subscribe\(|publish\(|join\(|leave\(
+```
+
 ### Step 2 — Category-by-Category Analysis
 
 Evaluate the codebase against each of the ten categories below. For every category, search for the listed detection patterns using `Grep` and `Read`, then record findings.
@@ -81,6 +89,8 @@ Before including any finding in the report, apply the following verification gat
 - Direct object references (IDOR) where user-supplied IDs are used to fetch records without ownership validation.
 - Endpoints that rely solely on client-side enforcement (hidden UI elements) rather than server-side checks.
 - CORS misconfigurations that permit arbitrary origins or reflect the `Origin` header without validation.
+- WebSocket, Socket.IO, SSE, or long-polling channels that skip Origin checks, upgrade/connect authentication, or tenant/channel membership validation.
+- Message handlers that accept `subscribe`, `publish`, `join`, `leave`, `presence`, `typing`, or export-progress actions without per-message object authorization.
 - Missing HTTP method restrictions (e.g., a route that accepts PUT/DELETE but only intended for GET).
 - JWT or session tokens that contain role claims without server-side verification against a trusted source.
 - Path traversal in file-serving endpoints.
@@ -109,6 +119,8 @@ params\.id|req\.params|request\.args\.get.*id
 csrf.*disable|csrf.*false|@csrf_exempt
 # Permissive CORS
 Access-Control-Allow-Origin.*\*|cors\(\{.*origin.*true
+# Real-time channel entry points and authorization-sensitive message actions
+server\.on\(['"]upgrade|new WebSocketServer|io\.on\(['"]connection|socket\.on\(['"](subscribe|publish|join|leave|presence|typing)
 # Path traversal indicators
 \.\.\/|\.\.\\|path\.join.*req\.|sendFile.*req\.
 ```
@@ -120,6 +132,7 @@ Access-Control-Allow-Origin.*\*|cors\(\{.*origin.*true
 - Use indirect references or opaque tokens instead of sequential database IDs.
 - Enable CSRF protection framework-wide; use `SameSite` cookie attributes.
 - Restrict CORS to an explicit allowlist of origins; never reflect arbitrary `Origin` values.
+- For WebSocket and Socket.IO, validate Origin at the browser boundary, authenticate at upgrade/connect time, and enforce authorization again for every message action and tenant/channel subscription. Origin is useful CSWSH evidence but is not an authentication substitute for non-browser clients.
 - Constrain file paths with canonicalization and chroot/jail patterns; reject `..` sequences.
 
 ---
@@ -245,6 +258,7 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 
 - Business logic that assumes client-side validation is sufficient (e.g., price set by client, quantity not validated server-side).
 - Missing rate limiting on sensitive operations (login, password reset, OTP verification, account creation).
+- Long-lived channels that lack max connections per user/IP, max message size, idle timeout, heartbeat/backpressure handling, or per-action quotas.
 - No account lockout or progressive delays after repeated failed authentication attempts.
 - Password reset flows that leak whether an account exists (different responses for valid vs. invalid emails).
 - Multi-step workflows that can be completed out of order or with steps skipped.
@@ -273,6 +287,8 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 # (Look for validation logic only in frontend files, absent from backend handlers)
 # Rate limiting absent
 rateLimit|rate_limit|throttle|slowDown
+# Long-lived channel throttling / timeout evidence
+maxConnections|max_connections|maxPayload|max_message_size|idleTimeout|pingTimeout|backpressure|disconnect|revalidate
 # Account enumeration
 "user not found"|"email not found"|"no account"|"invalid email"
 # Missing lockout
@@ -283,6 +299,7 @@ failedAttempts|failed_attempts|lockout|max_attempts
 
 - Establish threat modeling early in the design phase (STRIDE, PASTA, or attack trees).
 - Implement rate limiting and account lockout on all authentication and sensitive endpoints.
+- For WebSocket, SSE, and long-polling paths, enforce connection quotas, message-size caps, idle timeouts, heartbeat/backpressure handling, and per-action throttles separately from ordinary HTTP request rate limits.
 - Return generic error messages for authentication failures — never reveal whether a username or email exists.
 - Enforce all business rules server-side; treat the client as untrusted.
 - Define and enforce trust boundaries between components and network zones.
@@ -403,6 +420,7 @@ angular\.js|jquery\s*["\'].*1\.|lodash.*3\.|moment\(\)|request\(  # (npm 'reques
 - Credentials transmitted over unencrypted connections.
 - Session tokens in URLs (logged in proxies, referer headers, browser history).
 - Session IDs that do not rotate after successful authentication.
+- WebSocket or SSE connections that authenticate only the initial page load and never re-check the token, role, tenant membership, or revocation state after connect.
 - Missing multi-factor authentication on privileged accounts.
 - "Remember me" tokens that never expire or use predictable values.
 - Password recovery that uses knowledge-based questions or sends passwords in plaintext.
@@ -438,6 +456,8 @@ minLength.*[0-5]|passwordMinLength|min_password_length
 session.*=.*req\.query|token.*=.*req\.query|url.*session
 # Missing session rotation
 regenerate|rotateSession|session\.create|session_regenerate_id
+# Long-lived channel authentication and revocation
+reauth|revalidate|tokenVersion|sessionVersion|disconnect.*revok|revoked|membershipChanged|roleChanged
 # Certificate validation bypass
 rejectUnauthorized\s*:\s*false|verify\s*=\s*False|CERT_NONE|InsecureRequestWarning.*disable
 ```
@@ -450,6 +470,7 @@ rejectUnauthorized\s*:\s*false|verify\s*=\s*False|CERT_NONE|InsecureRequestWarni
 - Set session cookies with `Secure`, `HttpOnly`, and `SameSite=Lax` (or `Strict`) attributes.
 - Implement multi-factor authentication for all users, mandatory for administrative accounts.
 - Set absolute and idle session timeouts appropriate to the application's risk profile.
+- For long-lived channels, authenticate at upgrade/connect time, periodically revalidate session and membership state, and disconnect or downgrade sockets when a token is revoked, a user is disabled, or tenant/role membership changes.
 - Never expose session tokens in URLs.
 
 ---
@@ -512,6 +533,7 @@ curl.*\|.*sh|curl.*\|.*bash|wget.*\|.*sh|pip install.*--trusted-host
 - Authorization failures not logged.
 - Input validation failures not logged.
 - High-value transactions (payments, privilege changes, data exports) not logged.
+- Real-time channel events such as connect, disconnect, subscribe, publish, join, leave, authorization denied, rate limited, and revocation disconnect not logged with user, tenant/channel, and outcome.
 - Logs that contain sensitive data (passwords, tokens, PII, credit card numbers).
 - Logs stored only locally with no centralized aggregation or monitoring.
 - No alerting on suspicious patterns (brute-force attempts, impossible travel, privilege escalation).
@@ -532,6 +554,8 @@ curl.*\|.*sh|curl.*\|.*bash|wget.*\|.*sh|pip install.*--trusted-host
 ```
 # Logging presence
 logger\.|log\.|console\.log|logging\.|Log\.|syslog|winston|bunyan|pino|log4j|NLog|Serilog
+# Real-time channel audit events
+connect|disconnect|subscribe|publish|join|leave|presence|rate.*limit|authorization.*denied|revocation
 # Sensitive data in logs
 log.*password|log.*token|log.*secret|log.*credit_card|log.*ssn|logger.*api_key
 # Log injection
@@ -541,6 +565,7 @@ log.*req\.body|log.*request\.getParameter|logger\.info\(.*\+.*req
 **Mitigations:**
 
 - Log all authentication events, access control failures, input validation failures, and high-value business transactions.
+- Log long-lived channel security events with timestamp, user/session, IP, tenant/channel, action type, authorization result, payload size category, and disconnect reason.
 - Use structured logging (JSON) with consistent fields: timestamp, event type, user ID, source IP, resource, outcome.
 - Sanitize log inputs to prevent log injection (encode newlines and control characters).
 - Never log credentials, tokens, full credit card numbers, or other secrets; mask or redact sensitive fields.
@@ -592,6 +617,25 @@ url=|dest=|redirect=|uri=|callback=|src=.*http
 
 ---
 
+### Long-Lived Channel Evidence Gates
+
+Apply these gates whenever the reviewed application uses WebSocket, Socket.IO, SSE, long-polling, GraphQL subscriptions, collaborative editing, notifications, presence, export-progress, job-status, chat, or streaming APIs.
+
+| Gate | Required Evidence | Maps To |
+|---|---|---|
+| **WEB-WS-AUTH-01: Upgrade/connect boundary** | Inventory of upgrade/SSE/long-poll endpoints, Origin policy for browser clients, authentication at upgrade/connect time, and deployed proxy/CDN path behavior | A01, A07 |
+| **WEB-WS-AUTH-02: Per-message authorization** | Authorization on each subscribe, publish, join, leave, presence, typing, admin, export, or job action, including tenant/channel/object membership checks | A01, A04 |
+| **WEB-WS-AUTH-03: Long-lived session and abuse controls** | Max connections per user/IP, max message size, per-action quotas, idle timeout, heartbeat/backpressure handling, periodic re-auth, and disconnect-on-revocation | A04, A07, A09 |
+
+False-positive calibration:
+
+- Public broadcast streams can be Low or Informational when anonymous access is intentional, data is public/cacheable, credentials are not accepted, and no private tenant/channel actions exist.
+- Credentialed private channels are High when per-message object authorization or tenant membership checks are missing.
+- Treat as Critical when a real-time channel allows unauthenticated or cross-tenant publish/admin actions that can alter data, trigger jobs, or expose highly sensitive information.
+- Do not use permissive HTTP CORS alone as proof that a WebSocket is vulnerable; verify the actual upgrade/connect path, Origin policy, authentication, and message handlers.
+
+---
+
 ### Step 3 — Findings Verification and Classification
 
 Before finalizing findings, apply this verification checklist to each candidate finding:
@@ -635,6 +679,7 @@ Present findings in this structure:
 - **Location:** [file:line or file:function]
 - **Description:** [Clear explanation of the vulnerability, including how it could be exploited]
 - **Evidence:** [Code snippet or configuration excerpt]
+- **Real-time Channel Evidence:** [for WebSocket/SSE/long-poll findings: upgrade/connect auth, Origin policy, per-message authorization, throttling, revocation, logging; otherwise N/A]
 - **Remediation:** [Specific, actionable fix with code example where applicable]
 - **Verification:** [How to confirm the fix is effective]
 
