@@ -63,6 +63,20 @@ Before beginning, gather or confirm the following. Mark each item as obtained or
 - [ ] **Regulatory obligations** -- Applicable breach notification requirements (GDPR 72-hour rule, HIPAA, state breach notification laws, SEC 4-day rule, PCI DSS).
 - [ ] **Third-party dependencies** -- Managed security providers (MSSP/MDR), cyber insurance carrier notification requirements, external IR retainer.
 
+### Telemetry Provenance Baseline
+
+Record provenance before severity, containment, or notification decisions. A lab event, stale enrichment artifact, parser mismatch, or unnormalized timezone can otherwise make the response output non-reproducible.
+
+| Evidence type | Required fields | Weak or stale indicator |
+|---|---|---|
+| Alert or detection | Source system, rule ID/version, alert timestamp, ingestion timestamp, timezone, environment | Alert has no source rule, no timezone, or only a screenshot |
+| Raw event | Log source, event ID, collector/parser version, original timestamp, normalized UTC timestamp | Parser changed, timestamp drift exists, or raw event cannot be retrieved |
+| Enrichment | Enrichment source, lookup timestamp, value, confidence, cache age, analyst/automation actor | Threat-intel result is stale, unversioned, or disconnected from the IOC |
+| Correlation join | Join keys, query/run ID, time window, source systems, false-positive assumptions | Correlation cannot be rerun or joins dev/test/prod without scope labels |
+| Scope decision | Environment, affected identities, affected assets, business owner, exception owner/expiry | Incident-vs-test context or compensating control boundary is not recorded |
+
+If provenance is incomplete, state which decisions are provisional and what evidence must be preserved before changing systems.
+
 ---
 
 ## 3. Process
@@ -185,7 +199,35 @@ Indicator Analysis Record:
 - Confidence:        [Confirmed | Probable | Suspected]
 ```
 
+#### Event Timeline and Enrichment Lineage
+
+Build a reproducible timeline before escalating severity or executing containment. Preserve both original event time and normalized UTC time so responders can reconcile multi-region, cloud, EDR, and SIEM sources.
+
+| Lineage field | Evidence to record | Why it matters |
+|---|---|---|
+| Original timestamp | Source-local timestamp, timezone, clock skew if known | Prevents false sequencing when sources use different clocks |
+| Normalized timestamp | UTC timestamp, parser/normalizer version, ingestion delay | Makes timeline reproducible across tools |
+| Source system | SIEM, EDR, cloud audit log, identity provider, SaaS app, email gateway | Distinguishes firsthand evidence from enrichment or summary data |
+| Enrichment chain | TI feed, sandbox result, asset inventory lookup, identity lookup, cache age | Prevents stale enrichment from driving severity or notification decisions |
+| Correlation basis | Query ID, join keys, time window, analyst/automation actor | Lets another responder rerun and validate the conclusion |
+
+Mark lab, staging, exercise, and replay data explicitly. Do not suppress the event solely because it is non-production; instead record the effective boundary and any path from non-production to production identities, data, or automation.
+
 ### Phase 3: Containment, Eradication, and Recovery (NIST) / Containment + Eradication + Recovery (SANS)
+
+#### Response Automation Boundaries and Pre-Approval Triggers
+
+Separate recommended actions from verified enforced actions. Automated containment must be tied to pre-approved triggers, explicit scope, evidence preservation requirements, and rollback criteria.
+
+| Action class | Pre-approval trigger | Evidence to preserve first | Boundary / rollback criteria |
+|---|---|---|---|
+| Account disablement | Confirmed compromised credential, active abuse, privileged account use, or legal/HR approval for insider cases | Authentication logs, session tokens metadata, IdP audit event, affected identity scope | Re-enable only after credential rotation, owner sign-off, and no active sessions |
+| Host isolation | Active malware, lateral movement, data staging, C2 beaconing, or destructive activity | Memory/process list if safe, EDR timeline, network connections, disk snapshot plan | Restore network after clean scan, persistence review, and business owner approval |
+| Network block | Confirmed C2/exfiltration destination, malicious domain, or emergency egress control | Firewall logs, DNS logs, proxy logs, packet capture when available | Remove or narrow after IOC validation and false-positive review |
+| Cloud key/token revocation | Exposed key, suspicious API calls, impossible travel, or unauthorized role assumption | CloudTrail/audit logs, role session context, affected resource list | Restore access with least-privilege replacement credentials and owner approval |
+| Automated quarantine | Rule-confidence threshold met with approved playbook ID and target scope | Rule version, trigger event, automation run ID, target list, dry-run result if available | Roll back when trigger is invalidated or scope exceeds approved boundary |
+
+When the action is only recommended or planned, label it as `Planned` or `Pending approval`. Do not imply containment occurred unless enforcement logs, ticket state, or platform audit events prove it.
 
 #### Step 3.1: Containment Decision Tree
 
@@ -273,6 +315,20 @@ Restore systems to normal operations:
 4. **Enhanced monitoring** -- Increase logging verbosity and alerting sensitivity for a minimum of 30 days post-recovery
 5. **Stakeholder confirmation** -- Obtain business owner sign-off before declaring systems operational
 6. **Update IOC blocklists** -- Ensure all identified IOCs remain blocked across perimeter and endpoint controls
+
+#### Evidence Handoff and Rollback Criteria
+
+Before moving from containment to eradication or recovery, prepare a handoff packet that can be consumed by forensics, legal, engineering, and post-incident review teams.
+
+| Handoff item | Required evidence | Acceptance criteria |
+|---|---|---|
+| Evidence package | Evidence IDs, storage location, hash, collector, collection time, chain-of-custody owner | Forensics can verify integrity without relying on chat history |
+| Action ledger | Response action, actor/automation, approval, timestamp, target scope, enforcement proof | Every disruptive action has an owner and can be distinguished from a recommendation |
+| Exception register | Emergency exception, owner, expiry, compensating control, review date | Temporary response changes cannot become permanent silently |
+| Rollback plan | Reversal steps, prerequisites, validation checks, business owner, latest safe rollback time | Recovery team can restore service without reintroducing compromise |
+| PIR input | Timeline, root-cause hypothesis, control gaps, unresolved questions, tickets | Post-incident review can start without re-triaging the incident |
+
+Rollback is ready only when the rollback target, owner, validation signal, and business impact are documented. If rollback would destroy evidence or re-enable attacker access, explicitly mark it blocked and state the safer recovery path.
 
 #### Step 3.4: Stakeholder Notification
 
@@ -387,9 +443,14 @@ and recommended immediate actions. Lead with the most critical fact.]
 | Status | [Detected / Analyzing / Contained / Eradicated / Recovered / Closed] |
 
 ### Timeline
-| Timestamp (UTC) | Event | Source |
-|---|---|---|
-| [YYYY-MM-DD HH:MM] | [Event description] | [Log source / observation] |
+| Timestamp (UTC) | Original Timestamp / TZ | Event | Source | Parser / Query / Correlation ID |
+|---|---|---|---|---|
+| [YYYY-MM-DD HH:MM] | [source-local time] | [Event description] | [Log source / observation] | [parser/query/run ID] |
+
+### Telemetry Provenance and Scope
+| Evidence | Source System | Timestamp / Freshness | Environment | Scope / Owner | Confidence |
+|---|---|---|---|---|---|
+| [alert/event/enrichment] | [SIEM/EDR/cloud/IdP] | [time/cache age] | [prod/stage/dev/lab] | [assets/identities/owner] | [Confirmed/Probable/Suspected] |
 
 ### Indicators of Compromise
 | Type | Value | First Seen | Confidence | ATT&CK Technique |
@@ -397,9 +458,14 @@ and recommended immediate actions. Lead with the most critical fact.]
 | [IP/Domain/Hash/...] | [value] | [timestamp] | [Confirmed/Probable/Suspected] | [T-code] |
 
 ### Containment Actions
-| Action | Status | Timestamp | Performed By |
-|---|---|---|---|
-| [Action taken] | [Complete / In Progress / Planned] | [timestamp] | [responder] |
+| Action | Status | Timestamp | Performed By | Approval / Trigger | Enforcement Evidence | Rollback Criteria |
+|---|---|---|---|---|---|---|
+| [Action taken] | [Complete / In Progress / Planned / Pending approval] | [timestamp] | [responder/automation] | [ticket/playbook/trigger] | [audit log/run ID] | [criteria] |
+
+### Automation Boundary
+| Automation / Playbook | Trigger | Approved Scope | Evidence Preserved Before Action | Result |
+|---|---|---|---|---|
+| [name/run ID] | [condition] | [assets/identities/env] | [evidence IDs] | [enforced/recommended/blocked] |
 
 ### Eradication and Recovery
 - **Root Cause:** [Description of initial access vector and exploitation path]
@@ -417,6 +483,11 @@ and recommended immediate actions. Lead with the most critical fact.]
 
 ### Open Items and Next Steps
 - [ ] [Action item with owner and deadline]
+
+### Evidence Handoff and Rollback
+| Handoff Item | Location / Ticket | Owner | Integrity / Validation | Status |
+|---|---|---|---|---|
+| [evidence/action ledger/rollback/PIR input] | [URI/ticket/reference] | [owner] | [hash/check/result] | [ready/blocked/pending] |
 
 ### Handoff to Post-Incident Review
 - **PIR Scheduled:** [Date or "Not yet scheduled"]
