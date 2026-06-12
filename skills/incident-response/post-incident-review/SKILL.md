@@ -13,7 +13,7 @@ phase: [recover]
 frameworks: [NIST-SP-800-61r2]
 difficulty: beginner
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -280,6 +280,58 @@ Convert analysis findings into specific, measurable, assignable, and time-bound 
 | P2 | Moderate gap that represents a defense-in-depth weakness | 90 days |
 | P3 | Minor improvement or best-practice enhancement | Next quarter |
 
+### Step 6.1: Lesson-to-Control Verification Gates
+
+A PIR is not complete merely because it lists lessons learned and closes tickets. Each lesson must either map to a verified control change or follow an explicit accepted-risk path with owner approval, rationale, expiry, and revisit date.
+
+#### PIR-LC-01: Lesson-to-Control Mapping
+
+For each lesson learned, identify what changed because of the lesson. The changed item may be a preventive control, detective rule, corrective playbook, access policy, runbook, dashboard, training module, tabletop scenario, backlog item, or accepted-risk record.
+
+| Lesson ID | Lesson | Control/Process Changed | Change Type | Owner | Evidence | Status |
+|---|---|---|---|---|---|---|
+| LES-001 | [lesson] | [control/playbook/detection/training/workflow] | [prevent/detect/correct/train/accept] | [owner] | [ticket/config/rule/doc/dashboard] | [Open/Validated/Accepted Risk] |
+
+**Decision rule:** A narrative lesson with no mapped control, workflow, training, monitoring, or accepted-risk record is **not actionable** and should remain open.
+
+#### PIR-EV-01: Effectiveness Validation
+
+Ticket closure is not proof that the remediation worked. Before marking a lesson complete, record post-fix validation evidence.
+
+Acceptable evidence includes:
+
+- Test alert or detection firing proof.
+- Deployed configuration diff, merged PR, policy version, or rule ID.
+- Dashboard screenshot/link showing coverage or compliance.
+- Owner sign-off with date.
+- Audit log or production telemetry proving the control is active.
+- Tabletop, drill, training assignment, completion rate, or assessment result.
+- False-positive calibration or tuning result where the remediation is detection-related.
+
+| Remediation ID | Ticket | Control Changed | Validation Evidence | Validation Date | Owner Sign-Off | Decision |
+|---|---|---|---|---|---|---|
+| REM-001 | [ticket] | [control] | [test/log/dashboard/sign-off] | [YYYY-MM-DD] | [owner] | [Pass/Fail/Needs Follow-up] |
+
+#### PIR-RC-01: Recurrence Check
+
+Compare the current root causes, control failures, and remediation owners against previous PIR reports. A repeated root cause means the prior PIR did not change the system enough.
+
+| Current Root Cause | Prior PIR Match | Prior Owner | Prior Action | Recurrence Decision | Escalation |
+|---|---|---|---|---|---|
+| [root cause] | [PIR ID or None] | [owner] | [action] | [New/Recurring/Related] | [none/manager/risk committee] |
+
+**Decision rule:** Recurring failures require revised owner/deadline, escalation, and stronger validation evidence than the prior PIR used.
+
+#### PIR-EX-01: Risk-Accepted Lesson Path
+
+Some lessons may be accepted as monitor-only when the incident was a near miss, the cost of control change is disproportionate, or attribution confidence is low. These exceptions must be explicit and time-bounded.
+
+| Lesson ID | No-Change Rationale | Approver | Expiry | Revisit Date | Monitoring Signal |
+|---|---|---|---|---|---|
+| LES-002 | [rationale] | [name/role] | [YYYY-MM-DD] | [YYYY-MM-DD] | [dashboard/query/review] |
+
+**Decision rule:** A lesson with no control change and no accepted-risk record remains open. Accepted risk without approver, expiry, or monitoring is **not valid closure**.
+
 ---
 
 ## 4. Findings Classification
@@ -302,7 +354,7 @@ Produce the post-incident review report with these exact sections:
 ## Post-Incident Review: [Incident ID]
 **Date of Review:** [YYYY-MM-DD]
 **Date of Incident:** [YYYY-MM-DD]
-**Skill:** post-incident-review v1.0.0
+**Skill:** post-incident-review v1.0.1
 **Framework:** NIST SP 800-61 Rev 2
 **PIR Facilitator:** [Name or "AI-assisted -- human facilitator required"]
 
@@ -354,9 +406,25 @@ root cause, and the number/priority of remediation actions identified.]
 - [Gap or failure identified during retrospective]
 
 ### Remediation Plan
-| ID | Finding | Action | Owner | Priority | Deadline | Ticket |
+| ID | Finding | Action | Owner | Priority | Deadline | Ticket | Control Changed | Validation Evidence | Validation Date | Recurrence Link | Risk Acceptance |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| REM-001 | [Finding] | [Action] | [Owner] | [P0-P3] | [Date] | [ID] | [control/process] | [test/log/sign-off] | [Date] | [PIR ID/None] | [None/Accepted until date] |
+
+### Lesson-to-Control Verification
+| Lesson ID | Lesson | Control/Process Changed | Change Type | Owner | Evidence | Status |
 |---|---|---|---|---|---|---|
-| REM-001 | [Finding] | [Action] | [Owner] | [P0-P3] | [Date] | [ID] |
+
+### Effectiveness Validation
+| Remediation ID | Ticket | Control Changed | Validation Evidence | Validation Date | Owner Sign-Off | Decision |
+|---|---|---|---|---|---|---|
+
+### Recurrence Review
+| Current Root Cause | Prior PIR Match | Prior Owner | Prior Action | Recurrence Decision | Escalation |
+|---|---|---|---|---|---|
+
+### Risk-Accepted Lessons
+| Lesson ID | No-Change Rationale | Approver | Expiry | Revisit Date | Monitoring Signal |
+|---|---|---|---|---|---|
 
 ### Follow-Up Schedule
 - **Remediation Review Date:** [YYYY-MM-DD -- typically 30 days after PIR]
@@ -419,6 +487,17 @@ Documenting lessons learned and remediation actions in a PIR report that is then
 ### Pitfall 5: Waiting Too Long to Conduct the PIR
 
 NIST recommends conducting the PIR within several days of incident closure. Waiting weeks or months causes participants to forget critical details, misremember the sequence of events, and lose the emotional context that drives honest reflection. Schedule the PIR meeting before the incident is closed, ideally within 3-5 business days of recovery completion.
+
+### Pitfall 6: Treating Ticket Closure as Proof of Learning
+
+A closed remediation ticket proves that work was marked done, not that the incident lesson changed a control or prevented recurrence. Require lesson-to-control mapping, effectiveness validation, owner sign-off, and recurrence review before marking a lesson complete. If a lesson is intentionally not remediated, document the accepted-risk approver, expiry, revisit date, and monitoring signal.
+
+---
+
+## Changelog
+
+- **1.0.1** -- Added lesson-to-control verification, effectiveness validation, recurrence review, and risk-accepted lesson gates.
+- **1.0.0** -- Initial post-incident review workflow aligned with NIST SP 800-61 Rev 2.
 
 ---
 
