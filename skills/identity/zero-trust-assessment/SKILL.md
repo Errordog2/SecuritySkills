@@ -169,6 +169,7 @@ ZT-ID-09: Federation trust not validated — implicit trust of partner IdPs
 ZT-ID-10: Session management lacks continuous evaluation (no CAE or equivalent)
 ZT-ID-11: Privileged and break-glass access lacks JIT approval, device controls, or post-use rotation
 ZT-ID-12: Service identity evidence is missing for CI/CD, mesh, serverless, or machine clients
+ZT-ID-13: Identity-plane degraded mode bypasses token freshness, step-up authentication, or posture checks
 ```
 
 ---
@@ -199,6 +200,19 @@ Assess emergency and privileged access paths separately from standard user acces
 | Just-in-time elevation | Approval ticket, elevation request, TTL, entitlement scope, revocation event | Standing admin access exists without time limit or business justification |
 | Session and command logging | PIM/PAM session record, command transcript, resource logs, SIEM correlation | Admin actions cannot be reconstructed after the event |
 | Break-glass lifecycle | Named owner, sealed credential process, test record, post-use rotation/disablement | Emergency accounts are untested, shared, or left enabled after use |
+
+#### Identity-Plane Degraded Mode and Service Exceptions
+
+Score identity and policy evidence separately from network topology. A private network or enclave pattern is not automatically weak when identity, posture, and policy controls are enforced; conversely, a modern topology is weak if outage behavior or legacy exceptions silently bypass the identity plane.
+
+| Scenario | Evidence to collect | Decision gate |
+|---|---|---|
+| IdP outage or degraded mode | Cached-token TTL, step-up behavior, posture freshness, deny/allow policy, incident approval | Cached or degraded access does not skip step-up for sensitive resources and has a documented maximum duration |
+| Conditional-access dependency failure | Device posture signal age, risk-score fallback, CAE/event delivery status, fail-open/fail-closed rule | Missing identity/device signals are visible and trigger bounded access, not silent full trust |
+| Legacy service exception | Workload owner, business reason, allowed flows, expiry, compensating segmentation, review cadence | Every exception has owner, expiry, least-privilege scope, and a renewal decision |
+| Private-network resource access | Identity-aware proxy, mTLS, session authorization, resource-level policy, audit logs | Traditional routing is scored separately from whether policy quality and evidence meet zero trust goals |
+
+When documenting a finding, state whether the weakness is topology, identity-plane availability, policy freshness, or exception governance. This prevents overstating private networking while still catching permanent service trust holes.
 
 ### Step 2: Pillar 2 — Devices
 
@@ -462,6 +476,7 @@ State the expected public behavior before assigning severity. A finding should d
 - Service/workload identity matrix: [covered workload types, missing identities, exceptions, owners, expiry]
 - PDP/PA/PEP decision traceability: [sample allow/deny decision, policy version, PA action, PEP log, drift/outage behavior]
 - Privileged and break-glass access: [JIT approval, hardened device requirement, session logging, post-use rotation]
+- Identity-plane degraded mode and exceptions: [cached-token TTL, signal fallback, service exception owner, expiry, compensating controls]
 - Public resource calibration: [public-by-design resources, admin plane controls, data classification, final severity rationale]
 
 ### Zero Trust Roadmap
