@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16, NIST-SP-800-92]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -56,6 +56,7 @@ Before beginning analysis, gather or confirm:
 - [ ] **Time window:** The specific time range to analyze.
 - [ ] **Scope:** Which hosts, users, IP addresses, or network segments are in scope?
 - [ ] **Available log sources:** Which logs are available? (Windows Event Logs, Sysmon, EDR, firewall, proxy, DNS, cloud audit, application logs.)
+- [ ] **Agent runtime context:** For AI agents, which runtime, LLM gateway, tool broker, approval service, memory recall, and policy-evaluation logs are available?
 - [ ] **Known-good context:** What is expected/normal for this environment? (Authorized admin accounts, expected service accounts, normal working hours, approved applications.)
 - [ ] **Related alerts or incidents:** Are there existing alerts, tickets, or incident reports associated with this investigation?
 - [ ] **SIEM access:** Which SIEM platform contains the logs? (Determines query language and table names.)
@@ -120,6 +121,21 @@ Understand what each log source provides and which ATT&CK data sources it maps t
 | Azure Activity Log | Azure | Resource operations -- create, delete, modify at the control plane | Cloud Service (DS0025) |
 | GCP Cloud Audit Logs | GCP | Admin activity, data access, system events | Cloud Service (DS0025) |
 | Microsoft 365 Unified Audit Log | SaaS | Exchange, SharePoint, Teams, Azure AD activity | Application Log (DS0015) |
+
+#### Agent Runtime and Tool-Call Logs
+
+Agentic applications introduce log sources that sit between users, models, tools, approval systems, memory stores, and downstream side effects. Treat these as first-class security evidence rather than generic application logs.
+
+| Log Source | Platform | Key Events | ATT&CK / Analysis Relevance |
+|------------|----------|------------|-----------------------------|
+| Agent runtime trace log | AI application | Session start, agent identity, model call, plan/step summary, tool invocation, result status | Reconstructs autonomous action chains and separates user-triggered actions from agent-derived actions |
+| LLM gateway log | AI gateway/proxy | Model request metadata, prompt/context hash, response hash, policy result, model/tool routing decision | Shows what context reached the model without requiring raw secret-bearing prompt storage |
+| Tool broker log | Agent tool layer | Tool name, canonical input hash, output hash, caller agent, tenant/user scope, side-effect classification | Identifies privileged tool use, blocked calls, and cross-tool escalation paths |
+| Approval service log | HITL/control plane | Approval ID, approver, approved action hash, decision, TTL, revocation, execution binding | Proves high-impact actions used a fresh approval for the exact executed action |
+| Memory recall/write log | Agent memory/vector store | Memory ID, memory type, source trace, scope filters, recall rank, write approval, expiry, revocation | Detects poisoned or cross-tenant memory affecting future decisions |
+| Policy evaluation log | Guardrail/policy engine | Rule ID, decision, confidence, reason code, enforcement mode, policy version | Explains why an agent action was allowed, blocked, quarantined, or escalated |
+
+**Agent replay fields to preserve:** session ID, trace ID, parent trace ID, user or trigger identity, agent identity, tool name, tool input hash, tool output hash, context boundary label, policy decision, approval ID, approver, approval TTL, canonical action hash, executed action hash, replay evidence location, and redaction method.
 
 ### Step 2: Critical Windows Event IDs
 
@@ -248,6 +264,18 @@ Identify deviations from established baselines that may indicate malicious activ
 | **Behavioral** | Normal processes, commands, and network destinations | First-time process execution, new outbound destination | PowerShell on a server that has never run PowerShell |
 | **Relational** | Normal user-to-resource access patterns | Access to resources outside normal scope | Finance user accessing engineering source code repository |
 | **Protocol** | Expected protocols on network segments | Unexpected protocol usage | DNS over HTTPS (DoH) from a workstation, or SMB on an internet-facing interface |
+| **Agentic sequence** | Normal agent tool chain, approval flow, and context provenance | Missing parent trace, unapproved side effect, tool output promoted to instruction, approval/action hash mismatch | Browser output becomes an execution-agent instruction, followed by a privileged tool call without matching approval |
+
+**Agent-specific anomaly patterns:**
+
+| Pattern | Why It Matters | Evidence to Check |
+|---------|----------------|-------------------|
+| Missing parent trace on a side-effecting tool call | Investigators cannot prove what user request, model step, or policy decision caused the action | Session ID, trace ID, parent trace ID, user trigger, model/tool step summary |
+| Tool output promoted to instruction context | Retrieved pages, emails, files, or tool results can carry adversarial instructions that should remain untrusted data | Context boundary label, source type, trust tier, prompt/context hash, downstream role assignment |
+| Approval-action hash mismatch | A stale or broad approval may be reused for a different action than the one a human approved | Approval ID, approved action hash, executed action hash, approval TTL, revocation status |
+| Cross-agent trace gap | Delegated agents can hide capability escalation when handoffs do not carry provenance | Calling agent, receiving agent, parent trace, delegated capability set, tool-scope constraints |
+| Missing blocked-action telemetry | Only logging successful execution hides attempted abuse and weakens policy-effectiveness analysis | Blocked decision logs, reason codes, attempted tool/input hash, user/session linkage |
+| Raw prompt or tool payload overexposure | Full replay logs can leak secrets, PII, and customer data into broad log stores | Redaction method, protected evidence pointer, hash coverage, access controls |
 
 ### Step 6: Baseline Establishment
 
@@ -288,6 +316,15 @@ Combine data from multiple log sources to reconstruct attack sequences and incre
 | **Kill chain reconstruction** | Map events to ATT&CK tactics in chronological order | Phishing email -> malicious attachment execution -> C2 callback -> discovery commands -> lateral movement |
 | **IOC sweep** | Search for known indicators across all log sources | Search all logs for a specific IP, domain, hash, or user agent string |
 | **Statistical correlation** | Identify events that co-occur more frequently than expected | Hosts that generate both DNS queries to DGA domains and outbound connections on unusual ports |
+| **Agent trace replay** | Join agent runtime, LLM gateway, tool broker, approval, memory, and policy logs by trace ID and action hash | Web page summary -> tool broker call -> policy decision -> approval ID -> executed GitHub/API action |
+
+**Agent tool-call replay checklist:**
+
+1. Start from the executed or blocked tool event and record the tool name, canonical input hash, output hash, side-effect class, tenant/user scope, and result.
+2. Walk backward through `parent_trace_id` links until the originating user request, scheduled job, webhook, or autonomous trigger is identified.
+3. Confirm each context item has a boundary label such as system, user, retrieved data, tool output, memory recall, policy decision, approval, or action.
+4. For high-impact actions, verify the approval ID was fresh, unrevoked, and bound to the same canonical action hash that was executed.
+5. Use hashes, redacted summaries, and protected evidence pointers for replay. Do not require raw prompts or raw tool payloads in broad-access SIEM indexes.
 
 **Cross-source correlation example -- Compromised Account Investigation:**
 
@@ -337,7 +374,7 @@ Produce log analysis findings in this structure:
 ```markdown
 ## Security Log Analysis Report
 **Date:** [YYYY-MM-DD]
-**Skill:** log-analysis v1.0.0
+**Skill:** log-analysis v1.0.1
 **Frameworks:** MITRE ATT&CK v16, NIST SP 800-92
 **Analyst:** [Name or AI-assisted]
 
@@ -351,18 +388,26 @@ Produce log analysis findings in this structure:
 | Systems | [Hostnames, IPs, or network segments] |
 | Users | [Usernames or "all users"] |
 | Log Sources | [List of log sources analyzed] |
+| Agent Trace Scope | [Session/trace IDs, agent identities, or "N/A"] |
 
 ### Findings Summary
-| # | Finding | Severity | ATT&CK Technique | Log Source | Evidence |
-|---|---------|----------|-------------------|------------|----------|
-| 1 | [Description] | [P1-P4] | [T1078 or N/A] | [Source] | [Key event reference] |
-| 2 | [Description] | [P1-P4] | [T1078 or N/A] | [Source] | [Key event reference] |
+| # | Finding | Severity | ATT&CK Technique | Log Source | Trace / Evidence |
+|---|---------|----------|-------------------|------------|------------------|
+| 1 | [Description] | [P1-P4] | [T1078 or N/A] | [Source] | [Trace ID, event ID, or key reference] |
+| 2 | [Description] | [P1-P4] | [T1078 or N/A] | [Source] | [Trace ID, event ID, or key reference] |
 
 ### Detailed Findings
 #### Finding 1: [Title]
 **Severity:** [P1-P4]
 **ATT&CK Mapping:** [Technique ID -- Name]
 **Log Source:** [Source]
+**Trace ID:** [Trace ID or N/A]
+**Parent Trace:** [Parent trace or N/A]
+**Context Boundary:** [system / user / retrieved data / tool output / memory recall / policy decision / approval / action / N/A]
+**Policy Decision:** [allowed / blocked / quarantined / escalated / N/A]
+**Approval ID:** [Approval ID or N/A]
+**Action Hash:** [Approved hash vs executed hash or N/A]
+**Replay Evidence Location:** [Protected evidence pointer, redacted summary, or hash reference]
 **Evidence:**
 [Relevant log entries, timestamps, and entity details]
 
@@ -370,15 +415,18 @@ Produce log analysis findings in this structure:
 [Interpretation of the evidence -- why is this significant or benign?]
 
 ### Timeline
-| Timestamp (UTC) | Source | Event | ATT&CK Technique | Assessment |
-|-----------------|--------|-------|-------------------|------------|
-| [HH:MM:SS] | [Source] | [Description] | [T-ID] | [Suspicious / Benign / Confirmed malicious] |
+| Timestamp (UTC) | Source | Trace ID | Parent Trace | Event | Boundary / Decision | ATT&CK Technique | Assessment |
+|-----------------|--------|----------|--------------|-------|---------------------|-------------------|------------|
+| [HH:MM:SS] | [Source] | [Trace or N/A] | [Parent or N/A] | [Description] | [Boundary / policy decision] | [T-ID] | [Suspicious / Benign / Confirmed malicious] |
 
 ### Baseline Observations
 [Any baseline deviations noted, with comparison to established norms]
 
 ### Visibility Gaps
 [Log sources that were not available but would have provided relevant data]
+
+### Replay Integrity
+[Whether trace lineage, context-boundary labels, approval-action binding, and protected replay evidence were sufficient to reconstruct the event safely]
 
 ### Recommendations
 - [ ] [Action 1]
@@ -450,6 +498,14 @@ A single Event ID can have very different meanings depending on the context. Eve
 ### Pitfall 5: Not Establishing Baselines Before Looking for Anomalies
 
 Attempting to identify anomalous behavior without knowing what normal behavior looks like leads to both false positives (flagging normal activity as suspicious) and false negatives (missing truly anomalous activity that blends into an unfamiliar baseline). Invest in baseline establishment for high-value log sources before relying on anomaly-based analysis.
+
+### Pitfall 6: Treating Agent Logs as Ordinary Application Logs
+
+Agent tool calls need replay evidence that ordinary application logs often omit. A log entry that says `tool=deploy result=success` is not enough to determine whether the action was user-requested, produced by untrusted retrieved content, approved by a human, or bound to the exact approved action. Require trace lineage, context-boundary labels, policy decisions, approval-action hash binding, and redacted replay evidence for high-impact agent actions.
+
+### Pitfall 7: Logging Raw Prompts Instead of Protected Replay Evidence
+
+Full prompt, memory, and tool-output logs can expose secrets, private user data, customer records, and internal system instructions. Prefer protected evidence storage with access controls, hashes, redacted summaries, and stable evidence pointers. Analysts should be able to verify what happened without copying sensitive prompt and tool payloads into broad SIEM indexes.
 
 ---
 
