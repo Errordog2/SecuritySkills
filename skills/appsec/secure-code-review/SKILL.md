@@ -385,6 +385,43 @@ app.post('/upload', upload.single('file'), (req, res) => {
 ```
 Remediation: Validate MIME type against an allowlist, enforce maximum file size, generate a random filename, and store uploads outside the webroot.
 
+**TypeScript -- Metadata-Only Upload Validation (CWE-434)**
+```typescript
+// VULNERABLE: client-controlled MIME and original filename are trusted as the
+// only controls before publishing the object.
+app.post('/avatar', upload.single('file'), async (req, res) => {
+  if (!['image/png', 'image/jpeg'].includes(req.file.mimetype)) {
+    return res.status(400).end();
+  }
+
+  await fs.promises.rename(req.file.path, `/srv/www/uploads/${req.file.originalname}`);
+  res.json({ publicUrl: `/uploads/${req.file.originalname}` });
+});
+```
+Remediation: Treat MIME type and extension checks as metadata filters only. Add server-side content detection from bytes, parse with an allowlisted image/PDF/media parser, re-encode when practical, use generated names, and keep the object non-public until validation completes.
+
+**Python -- Unsafe Archive Extraction (CWE-22 / CWE-434)**
+```python
+# VULNERABLE: archive entries can traverse, overwrite, or expand outside bounds.
+from zipfile import ZipFile
+
+def import_theme(zip_path):
+    with ZipFile(zip_path) as zf:
+        zf.extractall('/var/app/themes')
+```
+Remediation: Iterate entries individually. Normalize each destination path under the extraction root, reject absolute paths, drive letters, `..` traversal, symlinks, hardlinks, and device files, cap file count and total expanded size, limit nesting depth and compression ratio, and prevent overwrites unless explicitly safe.
+
+**TypeScript -- Asynchronous Scanner TOCTOU (CWE-434)**
+```typescript
+// VULNERABLE: the object is public before the scanner verdict gates release.
+app.post('/upload', upload.single('file'), async (req, res) => {
+  const key = await objectStore.put(req.file.buffer, { public: true });
+  scanQueue.enqueue({ key });
+  res.json({ downloadUrl: objectStore.publicUrl(key) });
+});
+```
+Remediation: Store uploads in quarantine, deny read/public URL generation until a clean verdict is persisted, fail closed on scanner errors or timeouts, record release/delete audit evidence, and rescan when signature or parser policy changes require it.
+
 **Go -- SSRF (CWE-918)**
 ```go
 // VULNERABLE: user-supplied URL fetched without restriction
@@ -396,13 +433,64 @@ func fetchURL(w http.ResponseWriter, r *http.Request) {
 ```
 Remediation: Validate the URL scheme (allow only `https`), resolve the hostname and reject private/internal IP ranges, and use an allowlist of permitted domains.
 
-### 8.3 Review Checklist
+### 8.3 Upload Lifecycle Evidence
+
+For every upload, import, attachment, or user-provided file path, document the lifecycle before assigning severity:
+
+| Stage | Evidence Required | Failure Mode |
+|---|---|---|
+| Receive | Route, field name, maximum request/file size, file count, and authenticated/anonymous entry point | Oversized or multi-file uploads bypass intended limits |
+| Temporary storage | Quarantine path, generated filename/key, permissions, encryption needs, and webroot separation | Original names or public paths become executable or guessable |
+| Metadata filtering | Extension, MIME, and declared content-type allowlists treated as advisory metadata | Client-controlled metadata is mistaken for content validation |
+| Content validation | Magic-byte detection, parser-family allowlist, safe parser options, and re-encoding/sanitization when practical | Polyglot, spoofed, or parser-confusion files pass checks |
+| Malware/scanner gate | Scanner/verdict source, timeout behavior, fail-closed path, persisted clean verdict, and audit trail | Async scan is only telemetry after public release |
+| Release/serve | Public URL timing, content disposition, execution-disabled storage policy, CDN/cache policy, and sensitive bucket/prefix isolation | Untrusted files are served before validation or under executable policy |
+| Retention/delete | Expiry, manual review path, positive-verdict deletion/isolation, and rescan triggers | Malicious or stale files remain reachable after policy changes |
+
+Do not flag a quarantined upload as unrestricted solely because code receives `originalname` or `mimetype`. Escalate when that metadata is used to name, serve, parse, execute, or authorize a file without stronger evidence.
+
+### 8.4 Archive Extraction Evidence
+
+Treat archive extraction as a separate sink from ordinary uploads. Review concrete extraction APIs such as Python `ZipFile.extractall` and `tar.extractall`, Node.js `adm-zip.extractAllTo` and streaming unzip libraries, Java `ZipInputStream`, and Go `archive/zip`.
+
+Required evidence:
+
+- Destination path is built by normalizing each entry under a fixed extraction root and verifying the resolved path remains inside that root.
+- Absolute paths, Windows drive-letter paths, UNC paths, `..` traversal, symlink entries, hardlink entries, and device/special files are rejected or sandboxed.
+- File count, per-file size, total uncompressed size, compression ratio, and nested archive depth are capped before extraction completes.
+- Existing file overwrite behavior is explicit and safe; archive entries cannot replace application code, config, templates, SSH keys, or scheduled-task files.
+- Extraction runs with least-privilege filesystem permissions and produces audit evidence for rejected entries.
+
+### 8.5 Downstream Processor and URL Import Tracing
+
+An upload boundary can be safe while a later worker creates the exploitable path. Trace uploaded or imported content into:
+
+- Image libraries, thumbnailers, metadata strippers, and re-encoders.
+- PDF, Office, archive, media, OCR, and document conversion tools.
+- Search indexers, preview generators, virus scanners, and data loss prevention tools.
+- URL-based import flows that fetch attacker-controlled resources before processing them.
+- Object storage events, queues, webhooks, and background workers that process content with broader network or filesystem access.
+
+For URL imports, combine this step with SSRF review: restrict scheme, DNS resolution, private/internal IP ranges, redirects, request headers, response size, and parser behavior.
+
+### 8.6 Review Checklist
 
 - [ ] No use of native deserialization (pickle, ObjectInputStream, Marshal.load) on untrusted data.
-- [ ] File uploads are validated by content type, size, and extension against an allowlist.
+- [ ] File uploads have lifecycle evidence for receive, quarantine, validation, scan, release, serve, and retention/delete.
+- [ ] Content checks include server-side magic-byte or parser-family validation after MIME/extension allowlists.
 - [ ] Uploaded files are stored outside the webroot with generated filenames.
+- [ ] Public URLs, CDN access, or object-store reads are denied until validation/scanning produces a clean verdict.
+- [ ] Archive extraction normalizes entry paths and rejects traversal, symlinks, hardlinks, device files, excessive expansion, and unsafe overwrites.
+- [ ] Downstream processors for images, PDFs, Office docs, media, OCR, indexing, previews, and URL imports are traced as sinks.
 - [ ] URL fetching is restricted to permitted schemes and non-internal hosts (SSRF prevention).
-- [ ] Archive extraction checks for zip bombs and path traversal in entry names.
+
+### 8.7 File Handling Severity Calibration
+
+- **Critical:** Uploaded or extracted content can execute server-side, overwrite application/runtime files, plant scheduled jobs or configuration, or trigger unauthenticated remote code execution.
+- **High:** Untrusted uploads are publicly retrievable before validation or scanning, archive extraction can write outside the intended directory, or a downstream processor can be driven into SSRF, parser RCE, or sensitive-file access.
+- **Medium:** Validation relies only on metadata such as MIME or extension, but files remain quarantined and non-executable until manual review or a separate release gate.
+- **Low:** Lifecycle evidence is incomplete, but compensating controls show generated names, storage outside the webroot, non-public access, size/file-count limits, and no dangerous downstream processors.
+- **Informational:** Documentation or audit evidence is missing for a defensive upload path that otherwise has quarantine, content validation, scan-before-serve, and safe retention controls.
 
 ---
 
@@ -420,6 +508,7 @@ Each finding produced by this review must include the following fields:
 | **Location** | File path and line number(s) |
 | **Description** | What the vulnerability is and why it matters |
 | **Evidence** | Relevant code snippet demonstrating the issue |
+| **Upload Lifecycle Evidence** | For file findings, document receive, quarantine, validation, scan, release, serve, downstream processing, and retention evidence |
 | **Remediation** | Specific fix with code example where possible |
 | **Status** | Open, Mitigated, Accepted Risk, False Positive |
 
@@ -466,6 +555,7 @@ The final review output must be structured as follows:
   ```[language]
   [code snippet]
   ```
+- **Upload Lifecycle Evidence:** [for file findings: receive/quarantine/validation/scan/release/serve/downstream/retention; otherwise N/A]
 - **Remediation:** [specific fix with code example]
 - **Status:** Open
 
