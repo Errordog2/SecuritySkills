@@ -13,7 +13,7 @@ phase: [build, review, operate]
 frameworks: [OWASP-LLM01-2025, MITRE-ATLAS]
 difficulty: advanced
 time_estimate: "30-60min"
-version: "1.0.2"
+version: "1.0.3"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -65,6 +65,18 @@ Identify every point where user-supplied or externally sourced content reaches t
 
 ---
 
+### Additional interaction surfaces for durable and transformed context
+
+Include these surfaces in the Step 1 map even when they are not direct chat input:
+
+- **Durable memory and profile stores:** user preferences, team memory, long-term summaries, vector-store memories, learned lessons, workflow registries, and profile fields that can persist attacker-controlled text across sessions.
+- **Derived-text sources:** OCR from images/screenshots, speech-to-text transcripts, captions, alt text, generated image descriptions, EXIF/XMP metadata, and document parser side channels that become prompt text after extraction.
+- **Transformation and handoff paths:** summaries, routers, tool adapters, report generators, delegated tasks, and subagent handoffs that can turn untrusted data into downstream plans or instructions.
+
+For each surface, record source provenance, trust tier, authority level, persistence horizon, transformation path, and whether it can reach memory recall, delegated-agent instructions, or side-effecting tool arguments.
+
+---
+
 ## Step 2: Identify Direct Injection Vectors
 
 For each user input channel identified in Step 1, determine whether an attacker can influence the model's behavior by submitting crafted text. Examine:
@@ -79,6 +91,21 @@ For each user input channel identified in Step 1, determine whether an attacker 
 - Prompt templates with placeholder variables filled by user data
 - Absence of input validation or sanitization before prompt assembly
 - Raw inclusion of conversation history without filtering
+
+---
+
+### Direct-injection false-positive guardrails
+
+Do not report a finding solely because a string contains imperative or malicious-looking wording. A valid direct-injection finding needs an authority path: the text must reach a prompt role, policy parser, durable memory, tool argument, or downstream action where it can influence behavior.
+
+Benign examples that should be handled carefully include security training material, regression fixtures, quoted incident evidence, developer docs, shell tutorials, and runbooks. These are risky only when the application promotes the quoted text from data into higher-authority instructions or side-effecting tool calls.
+
+Reviewers should record:
+
+- whether suspicious-looking text is quoted/escaped and intentionally treated as data;
+- whether the text can cross from data into system/developer-style instruction context;
+- whether it can update durable memory, user/team profiles, learned rules, or workflow registries;
+- whether it can influence a side-effecting tool call without deterministic authorization.
 
 ---
 
@@ -97,6 +124,34 @@ For each external content source identified in Step 1, determine whether an adve
 - Document loaders, web scrapers, or API clients whose output is inserted into prompts
 - RAG retrieval pipelines that do not sanitize or attribute retrieved content
 - Absence of content provenance tracking (the LLM cannot distinguish trusted instructions from retrieved content)
+
+---
+
+### Durable and transformed indirect injection surfaces
+
+In addition to ordinary documents, emails, web pages, and API responses, inspect these surfaces:
+
+- **Durable memory and profile persistence:** long-lived memories, preferences, summaries, learned procedures, team context, and vector-store recalls can preserve injected instructions beyond the original session and reintroduce them later.
+- **Transformation and authority laundering:** summarizers, routers, tool adapters, report generators, and multi-agent handoffs can transform untrusted data into a "brief," "plan," "developer note," or delegated instruction that downstream components treat as authoritative.
+- **Non-text and derived-text ingestion:** OCR, screenshots, video/audio transcripts, captions, alt text, metadata, and generated descriptions can carry adversarial instructions even when the original source is an image, audio file, or document attribute rather than plain text.
+
+**Additional code patterns to inspect:**
+
+- Memory writes or recalls (`save_memory`, `memory.upsert`, `vector_store.add`, `save_context`, `learned_rules`, `workflow_registry`, `user_profile.preferences`) that lack writer identity, source trace, trust tier, TTL, dedupe/conflict handling, or recall-time demotion to data.
+- Summaries or handoff messages that lose source provenance or are inserted into system/developer-style roles despite being derived from untrusted tool output.
+- Extracted OCR/transcript/metadata text used as prompt context without the same untrusted-data boundaries applied to uploaded documents and web pages.
+
+#### Safe vs. Unsafe Authority Flow
+
+Prompt-injection findings should be based on trust and authority flow, not on the mere presence of suspicious-looking phrases.
+
+| Case | Treat As | Why |
+|------|----------|-----|
+| Quoted examples in docs, security training, test fixtures, or incident reports remain inside a data-only role and are summarized or rendered without tool authority | Usually benign | The text is intentionally preserved as evidence or training content and is not promoted into policy, system/developer instructions, or side-effecting tool arguments |
+| User or retrieved text is stored as a long-lived preference, memory, or learned procedure and later recalled into high-authority context | Finding | The original untrusted instruction can survive sessions, summarization, and context truncation |
+| Tool output is summarized and then sent to another agent as a plan, brief, developer message, or execution instruction without inherited provenance | Finding | The transformation launders untrusted data into a higher authority level |
+| Imperative text from OCR, transcripts, alt text, captions, or metadata is treated as factual context with no source boundary | Finding when it can influence model behavior or tools | Derived text has the same injection risk as direct document or web content |
+| Keyword filters block all occurrences of known attack phrases even inside escaped or quoted training material | False-positive risk | Keyword presence alone does not prove an exploitable authority path |
 
 ---
 
@@ -153,6 +208,30 @@ The attacker bypasses the model's safety guidelines or the application's behavio
 
 ---
 
+### 4.6 Durable Memory Poisoning
+
+The attacker places instructions into memory, preferences, summaries, or learned procedures that are retrieved in a future session and treated as trusted context. This is distinct from ordinary chat history because the instruction can survive context truncation, session resets, summarization, and cross-agent handoff.
+
+**What to evaluate:**
+- Who can write each memory type: user, assistant, tool, admin, automated summarizer, or another agent?
+- Does every memory record carry provenance, writer identity, source trace, trust tier, timestamp, confidence, TTL/expiry, and review state?
+- Is recalled memory injected as untrusted data by default, or can it become system/developer-style instruction?
+- Are imperative or tool-control memories quarantined, reviewed, expired, deduplicated safely, or demoted before recall?
+- Are there tests proving that remembered preferences, lessons, or summaries cannot authorize future side-effecting tool calls?
+
+### 4.7 Authority Laundering Through Transformations
+
+The attacker-controlled source may not directly reach a privileged prompt. Instead, it is summarized, routed, reformatted, embedded, or handed to another agent, and the derived text is then treated as trusted.
+
+**What to evaluate:**
+- Do summaries inherit the lowest trust tier of their source materials?
+- Do routers and tool adapters preserve source provenance and authority metadata?
+- Can a generated plan, research brief, handoff, or execution note become a higher-authority instruction for another component?
+- Are deterministic policy checks required before any component converts untrusted content into instructions for tools or agents?
+- Are multi-agent handoffs logged with source IDs, trust tiers, and allowed capability scope?
+
+---
+
 ## Step 5: Defense Evaluation
 
 Evaluate which of the following mitigations are implemented and how effectively. Note that no single defense is sufficient; a layered approach is required.
@@ -191,6 +270,8 @@ Evaluate which of the following mitigations are implemented and how effectively.
 - Does the application use a model or framework that supports instruction hierarchy (system instructions take precedence over user instructions)?
 - Is the system prompt structurally separated from user input (e.g., via the API's system message role) rather than concatenated in a single string?
 - Are retrieved documents and external content clearly demarcated as data, not instructions?
+- Do summaries, memories, OCR/transcript output, and multi-agent handoff messages preserve their original authority tier instead of being reintroduced as developer/system-like instructions?
+- Is there a policy that prohibits authority upgrades for untrusted content unless a deterministic, auditable approval path explicitly allows it?
 
 ### 5.7 Adaptive Attack Resilience
 
@@ -201,6 +282,15 @@ Evaluate which of the following mitigations are implemented and how effectively.
   - **InjecAgent** -- Tests indirect prompt injection in agentic settings where the LLM processes external content and has tool access.
   - **AgentDojo** -- Evaluates agent robustness against injection attacks across diverse tool-use scenarios with realistic adversarial content.
   - **fabraix/playground** (https://github.com/fabraix/playground) -- Open-source library of AI agent exploit PoCs that can serve as a test harness for validating direct and indirect injection defenses against published attack patterns.
+
+### 5.8 Memory, Transformation, and Derived-Text Controls
+
+- **Memory write controls:** Require explicit authorization, source trace ID, writer identity, trust tier, memory type, TTL, review state, and revocation path before durable memory can influence future prompts.
+- **Recall-time demotion:** Inject recalled memories, preferences, and summaries as data unless a separate policy engine upgrades them for a narrowly defined purpose.
+- **Dedupe and conflict review:** Near-duplicate or conflicting memories should be staged for review instead of silently replacing safe guidance with newer attacker-influenced text.
+- **Provenance preservation:** Summaries, reports, tool adapter outputs, and delegated-agent messages must inherit the lowest trust tier and source IDs of their inputs.
+- **Derived-text handling:** OCR, transcript, alt-text, caption, and metadata extraction must label source type, extraction confidence, and trust tier, then apply the same untrusted-data boundaries as document and web ingestion.
+- **Regression fixtures:** Include benign quoted attack strings in docs/tests/runbooks and vulnerable fixtures where the same strings are promoted into privileged roles or tool calls, so reviewers can reduce false positives without missing real authority-flow bugs.
 
 ---
 
@@ -234,13 +324,21 @@ Each finding should be assigned a severity based on potential impact:
 ### Interaction Surface Map
 [Table from Step 1]
 
+### Authority and Persistence Map
+| Source | Trust Tier | Authority Level | Persistence Horizon | Transformation Path | Tool/Side Effect Reachable? |
+|--------|------------|-----------------|---------------------|---------------------|-----------------------------|
+| [source] | [trusted / untrusted / mixed] | [system / developer / user / data / tool output / memory] | [single turn / session / durable] | [summary, recall, router, handoff, none] | [yes/no] |
+
 ### Findings
 
 #### Finding [N]: [Title]
-- Category: [Goal Hijacking | Prompt Leaking | Privilege Escalation | Data Exfiltration | Jailbreaking]
+- Category: [Goal Hijacking | Prompt Leaking | Privilege Escalation | Data Exfiltration | Jailbreaking | Durable Memory Poisoning | Authority Laundering]
 - Vector: [Direct | Indirect]
 - Severity: [Critical | High | Medium | Low | Informational]
 - Location: [file path and line numbers, or architectural component]
+- Source Provenance: [user input / retrieved document / tool output / OCR / transcript / memory / summary / handoff]
+- Authority Transition: [data-to-instruction path, or "none"]
+- Persistence Horizon: [single turn / session / durable / unknown]
 - Description: [What the vulnerability is and why it matters]
 - Evidence: [Code pattern or architectural observation that demonstrates the issue]
 - Recommendation: [Specific defensive measure to implement]
@@ -274,6 +372,14 @@ Each finding should be assigned a severity based on potential impact:
 4. **Granting the LLM excessive tool access.** Applications that give the LLM access to powerful tools (file system writes, email sending, database modifications, code execution) without independent authorization checks create high-severity privilege escalation risk. Every tool the LLM can invoke should have its own authorization gate that does not depend on the LLM's judgment.
 
 5. **Failing to treat retrieved content as untrusted.** RAG pipelines often insert retrieved document chunks directly into the prompt with no distinction from system instructions. The LLM cannot inherently distinguish "this is data to reason about" from "this is an instruction to follow." Retrieved content should be explicitly demarcated and, where possible, processed through a model or layer that enforces instruction hierarchy.
+
+6. **Flagging quoted training text without an authority path.** Security lessons, regression tests, runbooks, and incident reports often contain malicious-looking strings. Do not report them solely because they contain imperative words. Report them when the text can be promoted into higher-authority prompt roles, policy parsers, durable memory, or side-effecting tool arguments.
+
+7. **Ignoring durable memory poisoning.** Long-lived user preferences, summaries, vector memories, and learned procedures can preserve untrusted instructions after the original attack context disappears. Memory writes need provenance, trust tier, review state, TTL, conflict handling, and recall-time demotion.
+
+8. **Losing provenance during summaries and handoffs.** Tool output, web pages, retrieved documents, and emails can become dangerous when summarized into plans, briefs, or delegated-agent instructions. Derived content must inherit the source trust tier and must not become a higher-authority instruction without deterministic policy approval.
+
+9. **Overlooking OCR, transcripts, and metadata.** Modern multimodal systems turn images, video, audio, captions, alt text, and metadata into prompt text. These derived text sources must be labeled and bounded as untrusted input, not treated as neutral facts.
 
 ---
 
