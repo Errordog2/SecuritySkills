@@ -141,6 +141,20 @@ Read each pipeline configuration file and evaluate against SLSA v1.0 build track
 
 **Determination logic:** The repository achieves the highest level for which ALL checklist items are satisfied. Partial compliance at a given level means the repository remains at the level below.
 
+#### Runner Trust Evidence
+
+Do not score runner trust from the label alone. Record the effective isolation properties and distinguish safer ephemeral designs from persistent or shared runner pools.
+
+| Runner property | Evidence to collect | Failing condition |
+|---|---|---|
+| Ephemeral lifecycle | Fresh VM/container per job, no runner reuse, teardown logs, image provenance | Runner persists after a job or can be reused across trust boundaries |
+| Workspace reuse | Workspace cleanup policy, cache scope, artifact/cache key trust boundary | Untrusted PR code can read or poison cache/workspace state used by privileged jobs |
+| Runner scope | Repository/org/environment binding, allowed labels, protected-branch restrictions | A runner serves repositories, branches, or environments with different trust levels |
+| Network and secret reach | Egress policy, cloud metadata access, secret availability, environment protection | Untrusted jobs can reach production networks, metadata services, or deployment secrets |
+| Self-hosted hardening | Image baseline, patch cadence, isolation mode, audit logs, owner | Self-hosted runner has no owner, no rebuild cadence, or no audit trail |
+
+An ephemeral runner with no workspace reuse, scoped labels, and strict OIDC subject constraints may reduce PPE and persistence risk. A hosted or self-hosted runner is still a finding when cache, network, or secret boundaries allow untrusted code to influence privileged jobs.
+
 ---
 
 ### Step 3: OWASP CICD-SEC Risk Evaluation
@@ -189,6 +203,7 @@ environment:
 - Shared service accounts across environments.
 - Missing `CODEOWNERS` file or broad ownership patterns.
 - Workflows that do not pin the `GITHUB_TOKEN` to minimum required permissions.
+- OIDC trust policies that are present but allow broad subjects such as all pull requests, all branches, or all repositories in an organization.
 
 **Specific patterns in GitHub Actions:**
 
@@ -208,6 +223,18 @@ permissions:
 ```
 
 **Finding format:** Report the effective permission model, whether least-privilege is enforced, and whether identity controls (CODEOWNERS, required reviewers) are in place.
+
+#### OIDC Subject-Constraint Evidence
+
+OIDC/workload identity is safer than long-lived cloud keys only when the trust policy constrains who can mint tokens and from which workflow context.
+
+| Claim or policy field | Evidence to collect | Failing condition |
+|---|---|---|
+| `aud` | Expected cloud audience such as `sts.amazonaws.com` or provider-specific audience | Audience is missing, wildcarded, or shared with unrelated trust contexts |
+| `sub` | Exact repo, branch, tag, environment, or workflow subject pattern | Subject allows `pull_request`, all branches, or all repos without an environment gate |
+| Branch/ref restriction | Protected branch, tag pattern, or release environment binding | Deployment role can be assumed from arbitrary branches or forks |
+| Environment protection | Required reviewers, wait timer, deployment branch rules, secret scoping | Cloud role is available without protected environment approval |
+| Role/session scope | Least-privilege cloud role, session duration, external ID/condition keys, audit logs | OIDC role grants broad admin access or no reviewable session trail |
 
 ---
 
@@ -392,6 +419,7 @@ docker.sock
 - No SBOM (Software Bill of Materials) generation in the build pipeline.
 - Downloaded dependencies or tools without checksum verification.
 - Missing provenance attestation (SLSA provenance, in-toto, Sigstore).
+- Release artifacts rebuilt from a tag or branch instead of promoted from the reviewed build output without a reproducibility check.
 
 **Grep patterns:**
 
@@ -414,7 +442,19 @@ image: nginx@sha256:abcdef...  # GOOD
 image: nginx:latest            # BAD
 ```
 
-**Finding format:** Report whether artifacts are signed, whether provenance is generated, whether SBOMs are produced, and whether container images use digest pinning.
+#### Artifact Promotion Continuity
+
+Verify that the artifact approved by CI is the artifact released or deployed. A green build is weak evidence if the release workflow rebuilds from source without proving equivalence to the reviewed build.
+
+| Promotion step | Evidence to collect | Failing condition |
+|---|---|---|
+| Build output identity | Artifact digest, image digest, SBOM reference, provenance statement, build run ID | Release job cannot identify the exact artifact produced by the reviewed build |
+| Promotion path | Download-by-digest, registry digest promotion, immutable artifact storage, signed attestation | Release rebuilds from `main` or a tag without reproducibility evidence |
+| Reproducibility check | Deterministic build comparison, digest match, SLSA/in-toto attestation verification | Rebuilt artifact differs or no comparison is performed |
+| Deployment input | Deployment references immutable digest or signed artifact, not a mutable tag | Deployment uses `latest`, branch names, or unsigned archives |
+| Approval boundary | Release approval references the artifact digest and build run, not only a commit SHA | Human approval cannot tell which binary/container was released |
+
+**Finding format:** Report whether artifacts are signed, whether provenance is generated, whether SBOMs are produced, whether container images use digest pinning, and whether the reviewed build artifact is promoted unchanged or reproducibly rebuilt.
 
 ---
 
@@ -471,6 +511,18 @@ Produce the final report using the following structure:
   - L2: <met/not met> -- <evidence>
   - L3: <met/not met> -- <evidence>
 - **Gap to next level:** <what is needed to reach the next SLSA level>
+
+### Runner Trust and OIDC Evidence
+- **Runner lifecycle:** <ephemeral/persistent, teardown evidence, workspace reuse>
+- **Runner scope:** <repo/org/environment binding, label restrictions, trust boundaries>
+- **OIDC subject constraints:** <aud/sub/ref/environment restrictions and cloud role scope>
+- **Untrusted-context access:** <whether PR/fork jobs can reach secrets, cloud roles, caches, or production networks>
+
+### Artifact Promotion Evidence
+- **Reviewed build artifact:** <artifact/image digest, build run ID, provenance statement>
+- **Release input:** <promoted digest/signed artifact or rebuilt source ref>
+- **Continuity check:** <digest match, reproducibility check, or gap>
+- **Deployment reference:** <immutable digest/signed artifact vs mutable tag/archive>
 
 ### OWASP CICD-SEC Findings
 
