@@ -12,7 +12,7 @@ phase: [design, build, review]
 frameworks: [OWASP-LLM-Top-10-2025]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -168,6 +168,9 @@ Review the application against each of the ten OWASP LLM risk categories below. 
 - Absence of content moderation or anomaly detection on documents entering the knowledge base.
 - RLHF or feedback loops where user feedback directly adjusts model behavior without review.
 - Embedding stores without write-access controls — any service or user can insert or overwrite embeddings.
+- Success/failure feedback, CSAT, thumbs-up, or conversation-closed events that update prompt policy, model routing, durable memory, fine-tuning queues, adapters, generated skills, or workflow registries without a promotion gate.
+- Evaluation failures or red-team cases that are copied into training data or trusted memory while still being counted in release-gating safety metrics.
+- Online A/B tests, bandit routers, or cost/quality optimizers that promote prompts or models globally using shallow business metrics without abuse checks, safety guardrails, holdouts, canaries, or rollback.
 
 **Detection methods:**
 
@@ -175,6 +178,20 @@ Review the application against each of the ten OWASP LLM risk categories below. 
 - Check for content validation on ingested documents — format validation, length limits, anomaly detection, or human review steps.
 - Examine fine-tuning data pipelines for data provenance tracking and quality checks.
 - Search for feedback loops that directly influence model behavior without a human-in-the-loop approval step.
+- Search for promotion and self-learning terms near production writes: `feedback`, `thumbs_up`, `upvote`, `csat`, `conversation_closed`, `resolved`, `outcome`, `extract_lesson`, `promote`, `routingPolicy`, `prompt_policy`, `promptTemplateId`, `fine_tune_queue`, `eval_failure`, `memory.upsert`, `trusted=True`, `generated_skill`, and `workflow_registry`.
+- Trace whether feedback-derived records can modify prompts, RAG indexes, routing weights, durable memory, model adapters, fine-tuning datasets, generated skills, or generated workflows.
+- Verify that failed eval cases, jailbreak corpora, red-team prompts, and corrected answers have lineage labels and are excluded from reported safety or security metrics if reused for training, memory, or prompt repair.
+- Distinguish safe feedback collection from unsafe autonomous promotion: a queue that remains `pending_human_review`, cannot affect production behavior, and has no path into prompts, memory, RAG, routers, or training data is not a poisoning finding by itself.
+
+**Self-learning feedback promotion review gates:**
+
+Use this table for systems that learn from user feedback, reviewer labels, support tickets, eval failures, or online routing metrics.
+
+| Signal | Source authority | Affected artifact | Promotion gate | Holdout/canary | Safety guardrail | Train/eval separation | Rollback artifacts |
+|---|---|---|---|---|---|---|---|
+| `thumbs_up`, CSAT, closure, failure label, reviewer label, eval result | User, tenant admin, support agent, contractor, automation, red-team suite | Prompt template, system policy, RAG document, embedding, durable memory, router weight, fine-tune row, adapter, generated skill, workflow | Human approval, quorum, policy check, sample-size threshold, abuse/brigading filter | Held-out eval set, tenant-scoped canary, rollback window | Jailbreak, privacy, toxicity, tool-abuse, data-leakage, and policy-violation metrics | Dataset lineage, contaminated-case exclusion, metric disclosure | Prompt versions, embeddings, memories, summaries, caches, routes, generated procedures, model artifacts |
+
+Treat the pattern as a finding when feedback-derived data can become active behavior without the full path being visible and gated. Treat it as benign when feedback is only stored for review, is scoped to the submitter or tenant, cannot alter production artifacts, and has no background job or downstream promotion path.
 
 **Mitigations:**
 
@@ -184,6 +201,10 @@ Review the application against each of the ten OWASP LLM risk categories below. 
 - Implement human review workflows for fine-tuning dataset changes and knowledge base additions in high-risk applications.
 - Use read-only access for the LLM's retrieval path; separate write access into a controlled administrative flow.
 - Version control the knowledge base to enable rollback if poisoning is detected.
+- Require feedback-to-behavior lineage before any self-learning update is promoted: record the source signal, authority, affected artifact, approver, guardrail results, and rollout scope.
+- Gate online promotion through holdouts, tenant-scoped canaries, abuse detection, risk-specific safety metrics, and explicit rollback windows instead of relying only on CSAT, conversion, cost, or closure rate.
+- Keep training, eval, red-team, and production-memory datasets separated; if failed eval cases are reused for learning, mark them as contaminated and exclude them from reported release-gating metrics.
+- Roll back derived artifacts, not only the raw feedback row: invalidate prompt versions, embeddings, routing weights, durable memories, summaries, caches, generated skills, workflows, and fine-tuning queues created from the bad signal.
 
 **CWE Mapping:** CWE-1321 (Improperly Controlled Modification of Object Prototype Attributes), CWE-20 (Improper Input Validation)
 
