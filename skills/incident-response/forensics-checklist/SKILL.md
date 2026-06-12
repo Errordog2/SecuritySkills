@@ -63,6 +63,20 @@ Before beginning evidence collection, gather or confirm:
 - [ ] **Time synchronization** -- NTP configuration of affected systems; UTC timestamps preferred.
 - [ ] **Encryption status** -- BitLocker, LUKS, FileVault, or cloud-managed encryption on affected volumes.
 
+### Evidence Provenance and Scope Baseline
+
+Before collecting or prioritizing evidence, record the provenance needed to reproduce the collection decision. This prevents lab events, stale enrichments, parser changes, and mixed dev/stage/prod scope from being over-scored as production incident evidence.
+
+| Provenance field | Required evidence | Weak or stale indicator |
+|---|---|---|
+| Case scope | Incident ID, environment, affected asset list, owner, legal hold status | Scope mixes lab/stage/prod without labels or owner sign-off |
+| Source timestamp | Original timestamp, source timezone, normalized UTC timestamp, NTP/clock-skew status | Timestamp has no timezone or source clock drift is unknown |
+| Source system | Log source, sensor, cloud account/project/subscription, region, collector | Evidence source cannot be mapped to the affected environment |
+| Parser or enrichment lineage | Parser version, query ID, enrichment source, lookup timestamp, cache age | Enrichment is stale or parser changes cannot be reproduced |
+| Custody control | Collector, collection tool/version, storage destination, object lock/write protection, transfer owner | Evidence enters shared storage without access controls or custody owner |
+
+If provenance is incomplete, mark the collection plan as provisional and list the missing data needed before evidence is treated as durable.
+
 ---
 
 ## 3. Process
@@ -289,6 +303,20 @@ Preserve logs before rotation policies destroy them. Export and hash logs from e
 4. Store alongside disk and memory evidence in the case folder
 ```
 
+#### Log Preservation Lineage
+
+For each log source, preserve enough lineage for another examiner to rerun the query and verify the time window.
+
+| Log lineage field | Evidence to record | Failure mode |
+|---|---|---|
+| Time window | Original query start/end, timezone, normalized UTC range, ingestion delay | Query cannot prove whether events are missing because of timezone drift |
+| Source and parser | Source system, collector, parser/schema version, index/table/bucket name | Export cannot be mapped back to the source dataset |
+| Query provenance | Query text or saved-search ID, API request ID, analyst/automation actor | Another examiner cannot reproduce the export |
+| Retention and immutability | Retention policy, legal hold, object lock/WORM state, deletion protection | Logs may rotate or be altered after collection |
+| Correlation joins | Join keys, lookup/enrichment source, cache age, confidence | Enrichment result cannot be tied to the raw event |
+
+Preserve raw events separately from normalized or enriched views. Hash both when both are used in the timeline, and state which one drives the conclusion.
+
 ### Step 6: Cloud Forensics
 
 Cloud environments require different acquisition techniques because direct hardware access is not available.
@@ -339,6 +367,21 @@ gcloud logging read 'timestamp>="YYYY-MM-DDT00:00:00Z" AND timestamp<="YYYY-MM-D
 - Multi-region deployments require evidence collection across all regions
 - Serverless environments (Lambda, Cloud Functions) produce only invocation logs -- there is no disk to image
 
+#### Cloud-Native Evidence Preservation Gate
+
+Cloud evidence is durable only when snapshots, logs, and configuration exports are tied to immutable storage and account-level custody.
+
+| Cloud evidence type | Required preservation evidence | Failing condition |
+|---|---|---|
+| Audit logs | Organization/account/project ID, region, time range, export job ID, log validation status, hash | Export omits region/account scope or cannot prove log-file integrity |
+| Object storage logs | Bucket/container name, object versioning, object lock/legal hold, retention expiry, access log | Evidence bucket allows overwrite/delete by ordinary admins |
+| Disk or volume snapshot | Snapshot ID, source volume, creation time, encryption key, sharing permissions, hash/export record where available | Snapshot is shared, mutable, or lacks source-volume linkage |
+| Kubernetes/container evidence | Namespace, pod UID, image digest, node, audit log range, ephemeral volume status | Evidence only records pod name and loses UID/image/node context |
+| Serverless evidence | Function version/alias, invocation log range, configuration hash, deployment package digest | Only latest function config is captured, losing incident-time version |
+| IAM and configuration state | Policy version, role/session records, resource config export, collection timestamp | Effective permissions cannot be reconstructed for incident time |
+
+Prefer provider-native immutable storage controls such as S3 Object Lock, Azure immutable blob policies, or GCS bucket retention lock for exported evidence. Record any emergency exception owner and expiry when immutability cannot be enabled.
+
 ---
 
 ## 4. Findings Classification
@@ -369,11 +412,16 @@ Produce the evidence collection report with these exact sections:
 the order of collection, and any evidence that could not be obtained.]
 
 ### Evidence Inventory
-| Evidence ID | Type | Source System | Collection Time (UTC) | SHA-256 Hash | Examiner | Storage Location |
-|---|---|---|---|---|---|---|
-| EVD-0001 | Memory dump | [hostname] | [timestamp] | [hash] | [name] | [location] |
-| EVD-0002 | Disk image (E01) | [hostname] | [timestamp] | [hash] | [name] | [location] |
-| EVD-0003 | Log export | [source] | [timestamp] | [hash] | [name] | [location] |
+| Evidence ID | Type | Source System | Scope / Environment | Collection Time (UTC) | Source Time / TZ | SHA-256 Hash | Examiner | Storage Location |
+|---|---|---|---|---|---|---|---|---|
+| EVD-0001 | Memory dump | [hostname] | [prod/stage/dev] | [timestamp] | [source time/TZ] | [hash] | [name] | [location] |
+| EVD-0002 | Disk image (E01) | [hostname] | [prod/stage/dev] | [timestamp] | [source time/TZ] | [hash] | [name] | [location] |
+| EVD-0003 | Log export | [source] | [prod/stage/dev] | [timestamp] | [query time/TZ] | [hash] | [name] | [location] |
+
+### Provenance and Lineage
+| Evidence ID | Source / Collector | Parser or Query ID | Time Window | Enrichment Source / Cache Age | Confidence |
+|---|---|---|---|---|---|
+| EVD-0003 | [SIEM/cloud/EDR] | [parser/query/run ID] | [start-end UTC] | [source/cache age] | [Confirmed/Probable/Suspected] |
 
 ### Volatility Order Compliance
 | RFC 3227 Priority | Evidence Source | Collected | Notes |
@@ -398,9 +446,14 @@ the order of collection, and any evidence that could not be obtained.]
 [List any evidence that could not be collected and the reason]
 
 ### Cloud Evidence (if applicable)
-| Cloud Provider | Resource | Evidence Type | Collected | Notes |
-|---|---|---|---|---|
-| [AWS/Azure/GCP] | [Resource ID] | [Snapshot/Logs/Config] | [Yes/No] | [Notes] |
+| Cloud Provider | Account / Project / Region | Resource | Evidence Type | Preservation Control | Collected | Notes |
+|---|---|---|---|---|---|---|
+| [AWS/Azure/GCP] | [account/project/region] | [Resource ID] | [Snapshot/Logs/Config] | [object lock/retention/legal hold] | [Yes/No] | [Notes] |
+
+### Cloud Chain of Custody
+| Evidence ID | Provider Object / Snapshot ID | Immutable Storage Control | Access Scope | Transfer / Export Actor | Verification |
+|---|---|---|---|---|---|
+| [EVD-ID] | [bucket/key/snapshot/log export ID] | [object lock/retention/WORM] | [readers/admins] | [actor] | [hash/log validation] |
 ```
 
 ---
