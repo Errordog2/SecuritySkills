@@ -55,6 +55,18 @@ Before starting, collect or confirm:
 
 If asset context is missing, assume internet-facing and business-critical, and flag assumptions in the output.
 
+### Evidence Freshness and Provenance Baseline
+
+Before assigning an SLA tier or accepting a severity override, record the evidence snapshot used for the decision. Treat scanner severity as an input, not the final remediation priority, until reachability, exploitability freshness, and compensating controls are tied to reproducible evidence.
+
+| Evidence type | Required provenance | Stale or weak evidence indicator |
+|---|---|---|
+| Scanner finding | Scanner name, plugin/QID/rule ID, scan timestamp, affected asset, environment | Finding has no scan date, no asset mapping, or only a screenshot |
+| EPSS / KEV / SSVC inputs | EPSS score date, KEV feed date, SSVC decision source, analyst or automation version | Score snapshot is older than the review window or cannot be reproduced |
+| Reachability | Internet/internal/air-gapped path, exposed service, authentication boundary, network path evidence | Asset exposure is assumed without path evidence |
+| Compensating control | Control owner, policy/config source, test date, coverage, residual risk | Control is claimed but not tested against the affected asset/path |
+| Suppression or exception | Approver, owner, expiry, ticket, rationale, affected scope | Exception has no owner, expiry, or link to the affected finding |
+
 ---
 
 ## Process
@@ -84,7 +96,21 @@ Vulnerability Inventory Entry:
 - Patch Available:     [Yes (version) | No | Workaround Only]
 - Current SLA:         [Tier and deadline]
 - SLA Status:          [Within SLA | At Risk | Breached]
+- Evidence Snapshot:  [source, timestamp, analyst/automation, confidence]
+- Effective Scope:    [prod/stage/dev, exposed paths, affected identities, reachable assets]
 ```
+
+#### Reachability and Blast-Radius Evidence
+
+For each finding, separate raw severity from actionable remediation priority by recording the effective blast radius.
+
+| Blast-radius factor | Evidence to record | Priority impact |
+|---|---|---|
+| Environment | Production, staging, development, sandbox, or ephemeral preview | Production exposure prevents automatic downgrade; non-prod may relax only with isolation evidence |
+| Reachable attack path | Internet route, internal segment, authenticated path, service account path, batch job path | Reachable paths increase priority; unreachable paths require proof, not assumption |
+| Asset dependency | Downstream systems, data classification, customer-facing dependency, privileged identity dependency | Critical dependencies can escalate even when CVSS is moderate |
+| Alternate or background path | Automation, cron, message queue, service-to-service call, non-human identity | Hidden paths prevent deferral until ownership and access are verified |
+| Existing exploitation signal | KEV, EPSS trend, exploit PoC age, active incident, threat intel source | Fresh exploitation evidence can override a low historical severity |
 
 ### Step 2: Apply SLA Framework by Severity Tier
 
@@ -210,6 +236,18 @@ Patch Schedule Entry:
 - Days Remaining:      [N days]
 ```
 
+#### Maintenance-Window and Rollback Readiness Gate
+
+Do not treat a patch as "scheduled" until the implementation window and rollback evidence are specific enough for another reviewer to validate.
+
+| Readiness check | Evidence to collect | Failing condition |
+|---|---|---|
+| Maintenance-window fit | Window start/end, timezone, owner, CAB/emergency approval, freeze-period exception if applicable | Window falls after SLA deadline or lacks an approver |
+| Blast-radius alignment | Assets patched in the window, dependent services, customer/data impact, communication plan | Schedule omits reachable assets or hidden dependencies |
+| Pre-deployment validation | Test environment result, version compatibility, backup/snapshot status, health-check baseline | Patch has no test evidence for the affected platform or dependency chain |
+| Rollback path | Rollback command/runbook, snapshot ID, package downgrade path, data-migration reversal, owner | Rollback is generic, untested, or impossible for a schema/data change |
+| Post-change verification | Rescan plan, service health checks, exploit-path retest, control revalidation | Success criteria are not tied to the original vulnerability evidence |
+
 ### Step 6: Risk Acceptance and Exception Management
 
 For vulnerabilities that cannot be remediated within the SLA, document a formal risk acceptance or exception.
@@ -225,6 +263,7 @@ A risk acceptance is only valid when ALL of the following conditions are met:
 3. **Residual risk quantified:** The remaining risk after compensating controls is documented with potential business impact
 4. **Expiration date set:** Every risk acceptance has a mandatory review/expiration date (maximum 90 days for P1-P2, 180 days for P3-P4)
 5. **Appropriate authority approval:** Risk acceptance is signed by the appropriate level based on severity tier
+6. **Provenance preserved:** Every downgrade, suppression, or extension links back to evidence source, timestamp, affected scope, and reviewer/approver identity
 
 #### Approval Authority Matrix
 
@@ -253,8 +292,22 @@ Risk Exception Request:
 - Review Date:            [YYYY-MM-DD, within maximum exception duration]
 - Approver:               [Name, title]
 - Approval Date:          [YYYY-MM-DD]
+- Evidence Provenance:    [scanner/ticket/config source, timestamp, reviewer, confidence]
+- Effective Scope:        [assets/environments/identities covered by this exception]
+- Compensating Control Owner: [Name/team]
 - Status:                 [Pending | Approved | Denied | Expired]
 ```
+
+#### Suppression and Severity-Override Provenance
+
+Use this gate for any decision that lowers priority, extends an SLA, accepts a risk, or suppresses a finding.
+
+| Override type | Required fields | Review trigger |
+|---|---|---|
+| False positive | Detection source, reproduction attempt, reason, affected asset list, reviewer, timestamp | Reopen if scanner rule changes or affected software version changes |
+| Not reachable | Network path evidence, authentication boundary, asset owner, scan/test date | Reopen after network, route, IAM, or exposure changes |
+| Compensating control | Control config, test result, owner, coverage, expiry, residual risk | Reopen if control owner changes, test fails, or coverage drifts |
+| Business exception | Approver, business reason, expiry, remediation plan, next review date | Escalate if exception expires or auto-renews |
 
 ---
 
@@ -307,11 +360,18 @@ findings requiring immediate action.]
 |---|---|---|---|---|
 | [CVE-ID] | [score] | [score] | [Surging/Rising] | [Action] |
 
+### Evidence Freshness and Scope
+[List the evidence snapshot used for each high-impact priority decision or downgrade]
+
+| CVE ID | Evidence Source | Evidence Timestamp | Effective Scope | Reachability | Confidence |
+|---|---|---|---|---|---|
+| [CVE-ID] | [scanner/ticket/feed] | [YYYY-MM-DD HH:MM TZ] | [prod/stage/dev/assets] | [reachable/not reachable/unknown] | [High/Medium/Low] |
+
 ### Prioritized Patch Schedule
 
-| Priority | CVE ID(s) | Target System | Patch | Scheduled Window | SLA Deadline | Status |
-|---|---|---|---|---|---|---|
-| P0 | [CVE-ID] | [system] | [version] | [date/time] | [date] | [Scheduled/Pending/Complete] |
+| Priority | CVE ID(s) | Target System | Patch | Scheduled Window | SLA Deadline | Rollback Ready | Status |
+|---|---|---|---|---|---|---|---|
+| P0 | [CVE-ID] | [system] | [version] | [date/time] | [date] | [Yes/No + evidence] | [Scheduled/Pending/Complete] |
 
 ### Compensating Controls in Effect
 [List all active compensating controls with effectiveness ratings]
@@ -323,9 +383,16 @@ findings requiring immediate action.]
 ### Risk Exceptions
 [List all active risk acceptance/exception records]
 
-| Exception ID | CVE ID(s) | Original SLA | New Deadline | Approver | Status |
+| Exception ID | CVE ID(s) | Original SLA | New Deadline | Approver | Owner | Expiry | Evidence Provenance | Status |
+|---|---|---|---|---|---|---|---|---|
+| [EXC-ID] | [CVE-IDs] | [tier] | [date] | [name] | [team] | [date] | [source/timestamp] | [Approved/Pending] |
+
+### Suppressions and Severity Overrides
+[List every downgrade, suppression, or override with provenance and reopen trigger]
+
+| CVE ID | Override Type | Rationale | Scope | Evidence Timestamp | Reopen Trigger |
 |---|---|---|---|---|---|
-| [EXC-ID] | [CVE-IDs] | [tier] | [date] | [name] | [Approved/Pending] |
+| [CVE-ID] | [False Positive/Not Reachable/Compensating Control/Business Exception] | [reason] | [assets/envs] | [date] | [trigger] |
 
 ### Recommendations
 1. [Highest-priority actionable recommendation]
