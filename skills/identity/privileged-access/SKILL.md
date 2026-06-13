@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [CIS-Controls-v8, NIST-SP-800-53-AC-6]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -104,6 +104,7 @@ Identify and catalog:
 - **Service privileged accounts** — CI/CD pipeline credentials, automation accounts with elevated access
 - **Shared privileged accounts** — root accounts, local administrator accounts, shared service accounts
 - **Emergency/break-glass accounts** — sealed credentials for disaster recovery or outage response
+- **Delegated-admin and helpdesk paths** — MFA reset, password reset, mailbox delegation, tenant support roles, device wipe, break-glass unlock, and emergency override workflows with privileged effects
 - **Privileged access paths** — SSH keys, RDP credentials, cloud console admin access, API keys with admin scope
 
 **What to look for:**
@@ -200,6 +201,7 @@ PAM-JIT-07: JIT requests not logged with justification for audit trail (AC-6(9))
 PAM-JIT-08: No notification when JIT access is activated (security team unaware)
 PAM-JIT-09: Ephemeral credential patterns not used where available (static secrets in pipelines)
 PAM-JIT-10: No escalation path when JIT approver is unavailable
+PAM-JIT-11: Eligible-only admin assignment is treated as standing privilege without checking activation evidence
 ```
 
 **Platform-specific JIT mechanisms:**
@@ -220,6 +222,20 @@ PAM-JIT-10: No escalation path when JIT approver is unavailable
 | **Level 1 — Requested** | Manual JIT | Request via ticket, manual provisioning, manual revocation |
 | **Level 2 — Managed** | Automated JIT | PAM-managed elevation, approval workflows, automatic expiry |
 | **Level 3 — Adaptive** | Risk-based JIT | Context-aware approval, behavioral analytics, ephemeral credentials |
+
+**Eligible vs. standing evidence gate:** An eligible-only assignment with MFA, justification, approval, bounded activation, automatic expiry, and session recording should not be scored the same as standing privilege. Record activation history, approver, ticket/reference, max duration, active assignment count, and whether privileged actions can occur outside activation. If any privileged effect is available without activation, classify that path as standing access.
+
+#### Delegated-Admin and Helpdesk Workflow Coverage
+
+Operational workflows can grant privileged effects without using classic administrator role names. Review delegated-admin and helpdesk paths as first-class privileged access.
+
+| Workflow | Evidence to collect | Risk signal |
+|---|---|---|
+| MFA/password reset | Who can reset, second approval, target population, audit event, notification to user/security | Helpdesk can reset privileged users or MFA without second approval |
+| SaaS tenant delegation | Delegated admin roles, mailbox/file access, consent grants, partner access, support impersonation | Delegated role can alter tenant security or access sensitive data without PAM controls |
+| Device and endpoint admin | Device wipe, local admin elevation, EDR isolation, recovery key retrieval | Helpdesk actions can destroy evidence, bypass controls, or expose secrets |
+| Break-glass unlock | Who can unlock or reveal emergency credentials, approval chain, alerting, session recording | Emergency path bypasses dual control or monitoring |
+| Vendor/support access | Third-party admin scopes, time bounds, ticket linkage, access review | Vendor privilege persists after support event or lacks attribution |
 
 ---
 
@@ -244,6 +260,7 @@ PAM-BG-07: No post-incident review process after break-glass use
 PAM-BG-08: Break-glass credentials not rotated after each use
 PAM-BG-09: Break-glass procedure does not cover all critical failure scenarios (PAM down, IdP down, cloud provider outage)
 PAM-BG-10: Break-glass procedure not included in disaster recovery plans
+PAM-BG-11: Break-glass MFA, credential rotation, or recovery-path test evidence is missing or stale
 ```
 
 **Break-glass design requirements:**
@@ -258,6 +275,16 @@ PAM-BG-10: Break-glass procedure not included in disaster recovery plans
 | **Quarterly testing** | Validate procedure works, credentials are valid, alerts fire | AC-2(2) |
 | **Scoped permissions** | Break-glass accounts limited to recovery actions, not full admin | AC-6 |
 | **Time-bounded** | Break-glass sessions auto-terminate after defined maximum duration | AC-2(2) |
+
+**Break-glass proof checklist:**
+
+| Evidence | Required proof | Failing condition |
+|---|---|---|
+| Credential rotation | Last rotation timestamp, rotation owner, post-use rotation record, maximum age | Rotation older than policy or unknown |
+| MFA and recovery path | MFA method, backup factor, IdP/PAM outage path, last successful test | Account exists but cannot be proven usable during IdP/PAM outage |
+| Session proof | Session recording ID, command log, alert ID, immutable log destination | Break-glass use is not attributable or tamper-evident |
+| Test cadence | Last test date, tester, scenario covered, result, remediation ticket | Never tested or stale beyond policy |
+| Permission scope | Recovery actions allowed, excluded admin actions, time bound, dual control | Full tenant/root admin with no scoped recovery justification |
 
 ---
 
@@ -392,6 +419,14 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 | Break-Glass | [Not Present/Basic/Mature/Advanced] | [Target] |
 | Analytics | [Not Present/Basic/Mature/Advanced] | [Target] |
 
+### Delegated Admin and Break-Glass Evidence
+| Evidence Area | Current State | Risk Decision |
+|---|---|---|
+| Eligible vs. standing privilege | [eligible roles, active assignments, activation evidence, max duration] | [Pass / Finding / Unknown] |
+| Delegated-admin/helpdesk paths | [MFA reset, password reset, tenant delegation, device admin, vendor access] | [Pass / Finding / Unknown] |
+| Break-glass proof | [rotation, MFA test, recovery path test, session recording, alert ID] | [Pass / Finding / Unknown] |
+| Session proof | [recording ID, immutable log destination, command metadata, reviewer] | [Pass / Finding / Unknown] |
+
 ### Findings by Severity
 - Critical: [count]
 - High: [count]
@@ -457,6 +492,7 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 6. **Session recording without review** — recording sessions without monitoring or alerting provides forensic value but not prevention. Add real-time alerting.
 7. **Ignoring service account privilege** — PAM programs often focus on human admin accounts and neglect service accounts with equally powerful permissions.
 8. **No PAM HA/DR** — if the PAM tool is a single point of failure, its outage creates either a lockout or a break-glass event. Architect for resilience.
+9. **Ignoring delegated-admin paths** — helpdesk, vendor support, tenant delegation, and MFA reset workflows can have the same privileged effect as formal admin roles. Review the operational effect, not only the role name.
 
 ---
 
@@ -502,4 +538,5 @@ that may contain adversarial content.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.0.1 | 2026-06-13 | Added delegated-admin/helpdesk coverage, eligible-vs-standing privilege evidence, and break-glass rotation/MFA/session-proof gates. |
 | 1.0.0 | 2025-03-06 | Initial release |
