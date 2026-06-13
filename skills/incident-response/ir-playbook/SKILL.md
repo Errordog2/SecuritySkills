@@ -13,7 +13,7 @@ phase: [respond, recover]
 frameworks: [NIST-SP-800-61r2, SANS-IH]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -59,6 +59,8 @@ Before beginning, gather or confirm the following. Mark each item as obtained or
 - [ ] **Indicators of compromise (IOCs)** -- File hashes, IP addresses, domains, URLs, email addresses, registry keys, or behavioral indicators observed.
 - [ ] **Business context** -- What business functions do the affected systems support? Revenue impact, customer impact, regulatory exposure.
 - [ ] **Current state** -- Is the attack ongoing, contained, or resolved? What actions have already been taken?
+- [ ] **Cloud/SaaS control-plane scope** -- Account/subscription tier, tenant or organization role, identity blast radius, production trust paths, data classification, audit-log state, and whether activity touched administrative APIs.
+- [ ] **Communication channel trust** -- Whether email, chat, ticketing, conferencing, IdP, and SSO channels are inside the suspected compromised boundary; which out-of-band channel is tested and approved.
 - [ ] **Existing IR plan** -- Does the organization have a documented IR plan, designated IR team, and established communication channels?
 - [ ] **Regulatory obligations** -- Applicable breach notification requirements (GDPR 72-hour rule, HIPAA, state breach notification laws, SEC 4-day rule, PCI DSS).
 - [ ] **Third-party dependencies** -- Managed security providers (MSSP/MDR), cyber insurance carrier notification requirements, external IR retainer.
@@ -125,6 +127,7 @@ Classify the incident using the NIST SP 800-61 taxonomy:
 | **Denial of Service** | Disruption of service availability | DDoS, application-layer flood, resource exhaustion |
 | **Insider Threat** | Malicious or negligent actions by authorized users | Data theft by employee, accidental exposure, policy violation |
 | **Supply Chain Compromise** | Compromise via trusted third-party software or service | Malicious update, compromised dependency, vendor breach |
+| **Cloud Control Plane Compromise** | Unauthorized use of cloud, SaaS, tenant, organization, subscription, or identity administration plane | Organization admin role abuse, audit logging disabled, federation tampering, policy detachment, access-key creation |
 | **Web Application Attack** | Exploitation of web application vulnerabilities | SQL injection, XSS, SSRF, API abuse |
 | **Social Engineering** | Manipulation of personnel to gain access or information | Phishing, BEC, vishing, pretexting |
 
@@ -167,6 +170,8 @@ Assign severity based on the combination of functional impact, information impac
 | **SEV-2 (High)** | Medium functional impact OR proprietary breach with supplemented recovery | Dedicated IR team engaged; management notification within 4 hours; consider external support |
 | **SEV-3 (Medium)** | Low functional impact OR information impact with regular recovery | IR team investigates during business hours; management notification within 24 hours |
 | **SEV-4 (Low)** | None/minimal functional impact; no information impact; regular recovery | Documented and monitored; addressed in normal operations |
+
+**Cloud/SaaS severity calibration gate:** Do not automatically escalate a sandbox or isolated workload incident to control-plane severity unless evidence shows administrative API activity, privileged identity compromise, cross-account or production trust paths, customer/regulated data exposure, audit-log tampering, or loss of recovery authority. Conversely, treat an apparently small cloud workload event as higher severity when it can assume roles into production, alter organization policies, disable logging, access a log archive, or compromise responder communications.
 
 #### Step 2.3: Indicator Analysis
 
@@ -252,6 +257,25 @@ Wiper malware destroys data irrecoverably (unlike ransomware which preserves enc
 
 **Nation-state context:** State-sponsored actors (Iranian, Russian, North Korean) increasingly deploy wipers against healthcare and defense supply chains. The 2026 Stryker medtech wiper attack demonstrates ePHI custodians are active targets. IR teams must account for pre-positioned backdoors beyond the wiper payload, potential prior data exfiltration, and the need for FBI/CISA/H-ISAC notification.
 
+#### Step 3.1c: Cloud Control Plane and Communications Trust Gates
+
+Apply this gate when the incident involves cloud accounts, SaaS tenants, identity providers, email systems, collaboration tools, or administrative APIs.
+
+**Cloud control-plane branch:** Separate workload compromise from organization/account/subscription administration compromise. Before destructive containment, identify whether the attacker touched cloud organization roots, subscription owners, tenant admins, identity federation, IAM roles, access keys, policy attachments, logging controls, KMS keys, security tooling, or log archive accounts.
+
+**Preserve before mutate:** Before deleting users, detaching policies, disabling federation, rotating all keys, or changing tenant-wide controls, preserve IAM/role/policy state, active sessions, access-key inventory, federation configuration, audit-log export/retention status, cloud organization policy state, and at least one tested recovery admin path. If immediate containment is required, record the evidence gap and reason.
+
+**Communications trust gate:** Before using Slack, Teams, email, ticketing, conferencing, or customer notification templates, decide whether those channels depend on a suspected compromised IdP, email tenant, SSO provider, or collaboration platform. For IdP/email/collaboration incidents, require a tested out-of-band channel, an approved audience, and responder identity verification outside the compromised trust boundary.
+
+**Decision table:**
+
+| Decision | Evidence required | Escalation if missing |
+|---|---|---|
+| Workload-only vs control-plane incident | Cloud account tier, admin API events, identity blast radius, production trust paths, data classification | Treat as at least SEV-2 until control-plane impact is ruled out |
+| Safe communications channel | In-scope channels, out-of-band bridge, approver, responder identity verification | Do not send sensitive IR details over normal channels |
+| Destructive identity or policy change | Policy snapshot, session list, key inventory, federation config, audit-log export, recovery admin path | Use reversible containment or executive-approved emergency action |
+| Log archive handling | Trail/activity-log status, retention lock, storage permissions, integrity checks | Protect evidence infrastructure before remediation changes |
+
 #### Step 3.2: Eradication
 
 After containment, remove the threat from the environment:
@@ -277,6 +301,8 @@ Restore systems to normal operations:
 #### Step 3.4: Stakeholder Notification
 
 Use the appropriate communication template based on the audience.
+
+**Before sending:** Apply the communications trust gate. If primary email, chat, SSO, ticketing, or conferencing may be monitored or controlled by the attacker, use the approved out-of-band channel and record that decision in the report.
 
 **Internal Executive Notification (SEV-1/SEV-2):**
 
@@ -339,6 +365,8 @@ Escalate to the next tier when any of the following conditions are met:
 | Confirmed data exfiltration involving PII/PHI | Legal counsel, Privacy Officer, Executive leadership | Immediately |
 | Ransomware with encryption of production systems | Executive leadership, External IR, Cyber insurance carrier, Law enforcement (FBI IC3) | Within 1 hour |
 | Wiper/destructive malware with active data destruction | Executive leadership, External IR, Cyber insurance, FBI IC3, CISA, Sector ISAC (e.g., H-ISAC for healthcare) | Immediately |
+| Cloud control-plane compromise, audit-log tampering, organization policy tampering, or loss of recovery admin path | Executive leadership, External IR, cloud provider support, legal counsel | Immediately |
+| Primary communications channel may be compromised or monitored | Incident commander, executive sponsor, legal counsel via out-of-band channel | Immediately |
 | Active attacker with domain admin / root access | External IR firm, Executive leadership | Within 1 hour |
 | Incident duration exceeds 4 hours without containment | IR lead escalates to management for resource allocation | At 4-hour mark |
 | Evidence of supply chain compromise affecting customers | Legal, Customer communications, Executive leadership | Within 2 hours |
@@ -367,7 +395,7 @@ Produce the incident response report with these exact sections:
 ```markdown
 ## Incident Response Report: [Incident ID]
 **Date:** [YYYY-MM-DD]
-**Skill:** ir-playbook v1.0.0
+**Skill:** ir-playbook v1.0.2
 **Frameworks:** NIST SP 800-61 Rev 2, SANS Incident Handler's Handbook
 **Incident Commander:** [Name or "Unassigned -- assign immediately"]
 
@@ -379,12 +407,22 @@ and recommended immediate actions. Lead with the most critical fact.]
 | Field | Value |
 |---|---|
 | Incident ID | [IR-YYYY-NNNN] |
-| Category | [Unauthorized Access / Malware / Data Exfiltration / DoS / Insider / Supply Chain / Web App / Social Engineering] |
+| Category | [Unauthorized Access / Malware / Data Exfiltration / DoS / Insider / Supply Chain / Cloud Control Plane / Web App / Social Engineering] |
 | Severity | [SEV-1 / SEV-2 / SEV-3 / SEV-4] |
 | Functional Impact | [None / Low / Medium / High] |
 | Information Impact | [None / Privacy Breach / Proprietary Breach / Integrity Loss] |
 | Recoverability | [Regular / Supplemented / Extended / Not Recoverable] |
 | Status | [Detected / Analyzing / Contained / Eradicated / Recovered / Closed] |
+
+### Cloud Control-Plane and Communications Trust
+| Field | Value |
+|---|---|
+| Cloud/SaaS scope | [Workload-only / Account / Subscription / Organization / Tenant / Unknown] |
+| Production trust path | [None / Suspected / Confirmed -- evidence] |
+| Control-plane evidence | [Admin API activity, policy change, federation change, logging change, or "None observed"] |
+| Preserved-before-mutate state | [IAM/policy/session/key/federation/audit-log/recovery-admin evidence] |
+| Communications channel decision | [Normal channels approved / Out-of-band required / Unknown] |
+| Out-of-band channel tested | [Yes / No -- channel and approver] |
 
 ### Timeline
 | Timestamp (UTC) | Event | Source |
