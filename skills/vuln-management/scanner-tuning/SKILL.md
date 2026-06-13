@@ -13,7 +13,7 @@ phase: [operate]
 frameworks: [CVSS-4.0, CWE]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -53,6 +53,8 @@ Before starting, collect or confirm:
 - [ ] **Result volume:** Approximate number of findings per scan cycle and false positive rate if known
 - [ ] **Compliance requirements:** Whether scans must meet specific compliance mandates (PCI ASV, DISA STIG, CIS Benchmark)
 - [ ] **Multi-scanner context:** If using multiple scanners, which ones and how results are currently correlated
+- [ ] **Scanner engine and feed health:** Engine/build version and support status, plugin/feed/QID/vulnerability database version, last successful content update, feed source or mirror, signature/hash verification, sensor/connector sync status, and last-applied policy revision per scanner or sensor
+- [ ] **Freshness SLA and exceptions:** Required maximum feed age for production and regulated assets, plus approved exception details for air-gapped or intentionally delayed scanner content
 
 ---
 
@@ -255,6 +257,21 @@ Cross-Scanner Correlation Summary:
 - Coverage Gaps Identified: [List by scanner and vulnerability class]
 ```
 
+### Step 5b: Scanner Engine and Content Freshness Gate
+
+Before assigning a tuning maturity rating, verify that each scanner, sensor, connector, CI scanner, and local vulnerability database had current content at scan time. A low false-positive rate is not sufficient evidence of good tuning when the engine or vulnerability feed is stale.
+
+| Evidence | What to collect | Failing condition |
+|---|---|---|
+| Engine/support status | Scanner engine, appliance, connector, CLI, or container image version; vendor support/EOL status | Unsupported or EOL engine used for production scans |
+| Feed/database freshness | Plugin feed, QID build, vulnerability DB timestamp, Nuclei templates, Trivy/Grype DB, Snyk/Dependabot advisory sync | Unknown or older than the approved freshness SLA |
+| Sensor sync | Remote appliance/agent/cloud connector online status, last successful sync, last content import | Console is current but sensor/connector is stale or offline |
+| Policy revision drift | Console policy revision, sensor-applied policy revision, last-applied timestamp | Sensor runs an older policy than the approved console policy |
+| Feed integrity | Signature/hash verification, trusted mirror path, update proxy, import logs | Feed imported without integrity verification or from an untrusted mirror |
+| Air-gapped exception | Manual import cadence, exception owner, approval date, compensating detection, next import date | Delayed feed has no approved exception or compensating coverage |
+
+**Freshness maturity rule:** Do not classify a scanner program as `Optimized` if any production scanner has unknown feed age, unsupported engine status, failed sensor sync, unapplied policy revision, or unapproved stale air-gapped content. For internet-facing or regulated production assets, stale critical-vulnerability content beyond the freshness SLA is at least a High-priority tuning finding.
+
 ### Step 6: Scan Scheduling Optimization
 
 Configure scan schedules to balance coverage, freshness, and operational impact.
@@ -291,8 +308,8 @@ Classify the overall scanner tuning state into one of the following:
 |---|---|---|
 | **Poorly Tuned** | Scanner produces unreliable results | False positive rate > 30%, unauthenticated only, no severity overrides documented, no cross-scanner correlation |
 | **Basic** | Scanner operational but significant tuning gaps | False positive rate 15-30%, partial credential coverage, some ad-hoc overrides without documentation |
-| **Tuned** | Scanner produces reliable, actionable results | False positive rate < 15%, full credentialed scanning, documented overrides, regular policy review |
-| **Optimized** | Scanner program is mature and well-integrated | False positive rate < 5%, multi-scanner correlation, automated result ingestion, severity overrides with CVSS 4.0 justification, scan scheduling aligned with change management |
+| **Tuned** | Scanner produces reliable, actionable results | False positive rate < 15%, full credentialed scanning, documented overrides, regular policy review, engine/feed freshness known for production scanners |
+| **Optimized** | Scanner program is mature and well-integrated | False positive rate < 5%, multi-scanner correlation, automated result ingestion, severity overrides with CVSS 4.0 justification, scan scheduling aligned with change management, supported engines, current feeds, healthy sensor sync, and no unapproved policy drift |
 
 ---
 
@@ -303,7 +320,7 @@ Produce a structured report with these exact sections:
 ```markdown
 ## Scanner Tuning Report
 **Date:** [YYYY-MM-DD]
-**Skill:** scanner-tuning v1.0.0
+**Skill:** scanner-tuning v1.0.1
 **Frameworks:** CVSS 4.0, CWE
 **Reviewer:** AI-assisted (human review required for policy changes and severity overrides)
 
@@ -321,6 +338,15 @@ Highlight the most impactful tuning recommendations.]
 | Dangerous Checks | [Enabled / Disabled] | [Disabled for production] | [Priority] |
 | Scan Frequency | [Current schedule] | [Recommended schedule] | [Priority] |
 | Port Range | [Current range] | [Recommended range] | [Priority] |
+
+### Scanner Engine and Feed Freshness
+
+| Scanner | Engine Version | Feed/DB Version | Last Content Update | Sensor Sync | Policy Revision | Freshness Status | Risk |
+|---|---|---|---|---|---|---|---|
+| [platform] | [version/support] | [feed build] | [timestamp] | [healthy/stale/unknown] | [console vs sensor] | [current/stale/unknown/exception-approved] | [Low/Medium/High] |
+
+**Freshness SLA:** [e.g., critical production content <= 24h, general production <= 7d]
+**Air-gapped exceptions:** [owner, approval, import cadence, integrity verification, compensating controls]
 
 ### False Positive Analysis
 
@@ -398,6 +424,8 @@ Common Weakness Enumeration. A community-developed list of software and hardware
 4. **Failing to re-evaluate severity overrides when context changes.** A severity downgrade justified by network segmentation becomes invalid if the segmentation is later removed or modified. Severity overrides must be reviewed quarterly and immediately upon any change to the deployment context (network changes, system migration, data classification changes).
 
 5. **Not correlating results across scanners.** Organizations running multiple scanners often treat each scanner's output independently, leading to duplicate remediation efforts for the same vulnerability and missed findings that only one scanner detects. Establish a correlation process using CVE ID as the primary key and CWE as a fallback for non-CVE findings.
+
+6. **Treating a quiet stale scanner as tuned.** Unsupported scanner engines, stale plugin feeds, failed sensor sync, or outdated local vulnerability databases can reduce noisy findings while also missing current CVEs. Always verify feed freshness and engine support before interpreting a low false-positive rate or clean scan as evidence of scanner quality.
 
 ---
 
