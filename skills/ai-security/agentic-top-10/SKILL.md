@@ -13,7 +13,7 @@ phase: [design, build, review]
 frameworks: [OWASP-Agentic-AI, MITRE-ATLAS, NIST-AI-RMF]
 difficulty: advanced
 time_estimate: "45-90min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -66,6 +66,9 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Memory/state persistence | Vector DB configs, session stores, scratchpad files | Exposes memory poisoning surface |
 | Human approval gates | Workflow configs, UI code, approval logic | Determines if HITL can be bypassed |
 | Multi-agent communication | Message bus configs, inter-agent protocols, shared state | Identifies trust boundary violations |
+| Effective action paths | Tool registry, delegation map, workflow graph, child-agent capabilities | Distinguishes read-only agents from agents that can indirectly trigger write-capable tools |
+| Memory provenance controls | Memory schemas, vector metadata, audit logs, trust labels, integrity checks | Determines whether shared memory can be trusted by downstream agents |
+| Override and emergency-bypass evidence | Approval service logs, ticket links, bypass flags, audit events | Determines whether human oversight is per-action, auditable, and fail-closed |
 | Error handling and retry logic | Exception handlers, circuit breaker configs | Reveals cascading failure potential |
 | Authentication and identity | Auth middleware, token management, agent identity configs | Exposes identity gaps |
 | Rate limiting and quotas | API gateway configs, token budgets, cost controls | Determines resource exhaustion risk |
@@ -85,6 +88,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 - Service accounts with admin-level or wildcard IAM policies attached to agent runtimes.
 - Agents that inherit the permissions of the deploying user rather than operating under a scoped service identity.
 - Tool lists that grow over time without pruning (permission drift).
+- Read-only or human-approved parent agents that can delegate to write-capable child agents without an equivalent approval and audit boundary.
 - Absence of per-task or per-session tool scoping — every invocation gets the full tool set.
 
 **Real-World Failure Mode:**
@@ -181,6 +185,7 @@ In early 2024, researchers from UIUC demonstrated a multi-agent privilege escala
 - Vector databases (Pinecone, Weaviate, Chroma, pgvector) that agents both read from and write to.
 - Conversation history stores that are not integrity-protected (no checksums, no append-only enforcement).
 - Shared memory spaces in multi-agent systems where any agent can write context that other agents consume.
+- Shared summary stores without provenance tags, writer identity, source trust level, integrity checks, or downstream trust rules.
 - RAG pipelines where the ingestion source includes user-submitted or externally-sourced documents that are embedded without content validation.
 - Agent "learning" mechanisms that update long-term memory based on interaction outcomes without human review.
 
@@ -195,6 +200,7 @@ In 2024, researchers demonstrated a persistent memory poisoning attack against a
 3. Separate memory by trust level. User-sourced context, agent-generated context, and system-provided context must be stored and retrieved with different trust labels.
 4. Implement memory decay and review cycles. Periodically audit long-term memory for anomalous entries. Apply TTLs to user-sourced memories.
 5. In multi-agent systems, isolate memory per agent. Shared memory must be mediated by a trusted memory broker that validates writes.
+6. Require every memory record consumed by downstream agents to carry provenance metadata: writer identity, source type, trust label, write reason, timestamp, integrity status, and whether it is instruction-bearing or fact-only context.
 
 **Framework Mapping:**
 
@@ -213,6 +219,7 @@ In 2024, researchers demonstrated a persistent memory poisoning attack against a
 - Multi-agent orchestration frameworks (AutoGen, CrewAI, LangGraph, custom systems) where inter-agent messages are plain text with no authentication envelope.
 - Shared tool access where one agent's tool invocation is indistinguishable from another's in audit logs.
 - Hierarchical agent systems where sub-agents report results to an orchestrator that accepts them without validation.
+- Delegation flows where a read-only agent can ask a higher-privilege worker to perform side effects without re-evaluating the original user's authorization and approval state.
 - Agent-to-agent communication over unauthenticated channels (shared queues, databases, files) without message signing.
 - Absence of an explicit trust model document that defines which agents trust which other agents and for what operations.
 
@@ -312,6 +319,8 @@ In 2024, a financial services firm reported an incident (disclosed at a CISO rou
 - Fallback paths that skip approval when the approval service is unavailable (fail-open design).
 - Approval fatigue patterns — systems that generate so many approval requests that humans rubber-stamp them.
 - Agent ability to rephrase or reframe requests to make dangerous operations appear routine.
+- Emergency bypass paths that skip tickets, per-action approvals, reviewer identity checks, or audit event creation.
+- Bulk approval modes where one human action authorizes multiple downstream tool calls without showing the full action list and risk delta.
 
 **Real-World Failure Mode:**
 
@@ -325,6 +334,7 @@ In 2024, a red team exercise at a technology company (published in their securit
 4. Implement approval diversity — critical operations require approval from multiple reviewers or through multiple channels.
 5. Present approval requests with full context. Show the human reviewer the complete action chain, not just the immediate request.
 6. Rotate and limit approval sessions to combat approval fatigue. Set maximum approval counts per session.
+7. Log every approval, denial, override, and emergency bypass with reviewer identity, action hash, ticket/reference ID, before/after permissions, and downstream tool calls approved by that decision.
 
 **Framework Mapping:**
 
@@ -428,7 +438,23 @@ Grep: "send_message|delegate|dispatch|publish|subscribe|queue" in **/*.{py,ts,js
 
 # Human approval gates
 Grep: "approve|confirm|human_in_the_loop|hitl|review|authorize" in **/*.{py,ts,js,yaml,yml}
+
+# Delegation and memory trust boundaries
+Grep: "delegate|child_agent|worker_agent|handoff|orchestrator|memory_write|shared_memory|summary_store|provenance|override|bypass|emergency" in **/*.{py,ts,js,yaml,yml,json,toml}
 ```
+
+### Step 1b - Effective Action, Memory, and Override Evidence Gates
+
+Use this evidence gate before rating AG01, AG04, AG05, or AG08. Score the effective action path, not only the prompt or nominal agent role.
+
+| Gate | Evidence required | Risk signal |
+|---|---|---|
+| Effective action path | Parent and child agents, tool capability matrix, direct and delegated write paths, external side effects, per-session tool scopes | A read-only agent can indirectly trigger write-capable tools through delegation |
+| Memory boundary provenance | Memory store owners, writer identity, trust labels, source type, integrity status, retention/TTL, downstream consumers | Shared memory or summaries are trusted as instructions/facts without provenance |
+| Human override auditability | Approval request payload, reviewer identity, ticket/reference ID, action hash, approval scope, emergency bypass path, audit event | Human oversight exists but is bulk-approved, unaudited, or fail-open |
+| Delegated side-effect control | Authorization re-check at delegation boundary, child-agent tool scope, approval inheritance rules, denial behavior | Lower-privilege agents can launder requests through higher-privilege agents |
+
+If this evidence is unavailable, record it as a finding or limitation. Do not downgrade AG01/AG04/AG05/AG08 solely because the top-level agent claims to be read-only or human-reviewed. Conversely, if the effective action path proves there are no direct writes, external actions, delegated side effects, or emergency bypasses, do not overrate the risk solely from broad prompt language or theoretical capabilities.
 
 ### Hands-On Assessment Tooling
 
@@ -494,6 +520,14 @@ Structure the final report as follows:
 - Memory stores: [types]
 - Human approval gates: [present/absent, description]
 - Multi-agent communication: [method]
+
+## Effective Action, Memory, and Override Evidence
+| Evidence Area | Observed State | Risk Decision |
+|---|---|---|
+| Effective action path | [direct tools, delegated tools, write-capable child agents, external side effects] | [PASS / FINDING / UNKNOWN] |
+| Memory provenance | [writer identity, trust labels, source type, integrity status, downstream consumers] | [PASS / FINDING / UNKNOWN] |
+| Human override audit | [approval payload, reviewer identity, ticket, action hash, emergency bypass audit] | [PASS / FINDING / UNKNOWN] |
+| Delegated side effects | [authorization re-checks, child-agent scope, approval inheritance, denial behavior] | [PASS / FINDING / UNKNOWN] |
 
 ## Findings by Threat Category
 
