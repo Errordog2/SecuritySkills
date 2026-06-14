@@ -12,7 +12,7 @@ phase: [design, build, review]
 frameworks: [OWASP-LLM-Top-10-2025]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -56,9 +56,64 @@ Before beginning the review, collect the following:
 
 ---
 
+In addition to the baseline context checklist, record these evidence artifacts before category mapping:
+
+- [ ] **Model-tool boundary map** - every model, router, tool broker, callable tool, credential scope, side-effect class, and approval gate the model can reach.
+- [ ] **Prompt provenance record** - the source and trust level for system, developer, user, retrieved, tool-output, transformed, and inter-agent content before it is assembled into model context.
+- [ ] **Fallback and degraded-mode behavior** - retry routes, context-window overflow handling, backup models, reduced-policy evaluation modes, emergency bypasses, and whether they change the effective OWASP category or severity.
+
+---
+
 ## 3. Process
 
-Review the application against each of the ten OWASP LLM risk categories below. For each category, examine the codebase for the specified patterns, apply the detection methods, and recommend the listed mitigations where gaps are found.
+Review the application against each of the ten OWASP LLM risk categories below. Before assigning a category or severity, build the evidence maps in this section so the review is grounded in the actual model boundary, prompt provenance, tool permissions, and fallback behavior rather than keyword matches alone. For each category, examine the codebase for the specified patterns, apply the detection methods, and recommend the listed mitigations where gaps are found.
+
+### Evidence Gate Before Category Mapping
+
+Complete this gate before labeling a finding as LLM01-LLM10. If the evidence is missing, record that as an explicit review limitation and avoid escalating severity solely because the code contains an LLM, a prompt, or a tool name.
+
+#### Model-Tool Boundary Map
+
+Document every model execution path and the exact tools available on that path:
+
+| Boundary item | Evidence to collect | Risk decision |
+|---------------|---------------------|---------------|
+| Model or router | Provider, model ID, route conditions, fallback model, temperature, context limits | Whether a weaker or differently governed model can be reached |
+| Tool broker | Function-calling registry, agent framework, plugin loader, MCP/tool gateway | Whether the model can choose tools directly or only request deterministic dispatch |
+| Tool capability | Read/write/delete/send/deploy/pay/execute class, scoped resource, parameter validation | Whether the workflow is read-only, state-changing, destructive, or externally visible |
+| Credential scope | End-user delegated token, service account, tenant-scoped credential, shared secret | Whether tool access can cross user, tenant, or privilege boundaries |
+| Approval gate | Human approval, deterministic policy check, dry-run preview, dual control, audit log | Whether consequential actions execute before independent validation |
+| Output sink | UI rendering, database write, shell/API call, CMS publish, email/message send | Whether model output is displayed only, re-ingested, or acted upon |
+
+Use the map to separate benign read-only workflows from high-impact agentic workflows. For example, a summarizer using only `docs.read` with `outbound_actions: none` and a mandatory human publish gate should not be treated as high-severity excessive agency unless another path bypasses those controls.
+
+#### Prompt Provenance Record
+
+Track every context segment before it reaches the model:
+
+| Prompt segment | Typical source | Trust label | Review questions |
+|----------------|----------------|-------------|------------------|
+| System prompt | Server-side configuration or prompt file | Trusted if server-owned and access-controlled | Is sensitive logic embedded? Can users modify or read it? |
+| Developer or policy prompt | Application policy layer, orchestration config | Trusted only if immutable to end users | Is policy weaker in fallback or evaluation modes? |
+| User prompt | Request body, chat message, uploaded text | Untrusted | Is it isolated from instruction channels and length-limited? |
+| Retrieved context | RAG store, search result, email/page/document import | Untrusted or tenant-scoped | Is provenance, permission scope, and relevance threshold preserved? |
+| Tool output | API response, browser result, database row, generated HTML | Untrusted until validated | Is it rendered directly, re-ingested, or allowed to influence tool calls? |
+| Transformed content | Summaries, extracted fields, OCR, markdown-to-HTML | Derived/untrusted | Is the original source retained for audit and sanitization? |
+| Inter-agent message | Planner/worker handoff, memory, queue payload | Boundary-crossing | Can a lower-trust agent affect a higher-trust tool path? |
+
+Prompt provenance drives category mapping. Untrusted retrieved markdown that is rendered or re-ingested may map to LLM01, LLM05, LLM08, or LLM02 depending on the sink and permissions. Do not collapse all prompt issues into LLM01 without proving the source, boundary, and downstream impact.
+
+#### Fallback and Degraded-Mode Analysis
+
+Review steady-state and non-steady-state behavior:
+
+- Model fallback: safer primary model replaced by a legacy, cheaper, self-hosted, or less-governed model.
+- Retry path: failed policy check, timeout, context overflow, rate limit, or provider outage changes prompt construction or tool access.
+- Evaluation mode: test/eval harness runs with weaker filters, wider logs, or synthetic tenants that can leak into production examples.
+- Human-gate degradation: publish/send/deploy approval skipped during incident, preview, batch mode, or automation.
+- Memory/RAG degradation: source labels, tenant filters, or similarity thresholds dropped to fit context limits.
+
+When degraded behavior materially changes the risk, report both the normal path and the degraded path in the finding evidence.
 
 ---
 
@@ -395,6 +450,13 @@ Review the application against each of the ten OWASP LLM risk categories below. 
 | **Low** | Minor information disclosure, best practice deviation, or defense-in-depth gap. | Model output lacks disclaimer for AI-generated content (LLM09). Dependency one minor version behind with no known exploit (LLM03). |
 | **Informational** | Observation or recommendation for improvement with no current exploitable risk. | Suggest adding similarity score threshold to RAG retrieval (LLM08). |
 
+Severity must follow the effective boundary, not the category label alone:
+
+- Downgrade or keep low severity when the model path is read-only, tenant-scoped, has no external side effects, and requires a human approval gate before publication or action.
+- Escalate when fallback models, retry paths, or degraded modes remove provenance labels, weaken policies, broaden tool access, or bypass approval gates.
+- Escalate cross-category findings when untrusted prompt content can influence a privileged tool, a write sink, a publish path, or a different tenant's data.
+- Report missing boundary/provenance evidence as a separate review gap instead of assuming the highest-impact path exists.
+
 ---
 
 ## 5. Output Format
@@ -413,6 +475,26 @@ Structure the findings report as follows:
 
 [2-3 sentences: overall risk posture, critical findings count, top recommendation]
 
+## Evidence Maps
+
+### Model-Tool Boundary Map
+
+| Model/path | Tools available | Credential scope | Side-effect class | Approval gate | Fallback/degraded behavior |
+|------------|-----------------|------------------|-------------------|---------------|----------------------------|
+| [path] | [tools] | [scope] | read-only/state-changing/destructive/external | [gate] | [fallback route or none] |
+
+### Prompt Provenance Record
+
+| Segment | Source | Trust label | Controls before model context | Downstream sinks |
+|---------|--------|-------------|-------------------------------|------------------|
+| [segment] | [source] | trusted/untrusted/tenant-scoped/derived | [validation, labeling, filtering] | [rendered, re-ingested, tool args, publish] |
+
+### Category Mapping Rationale
+
+| Evidence item | Mapped category | Severity rationale | Notes |
+|---------------|-----------------|--------------------|-------|
+| [boundary/provenance fact] | LLM0X:2025 | [why this category/severity applies] | [fallback or limitation] |
+
 ## Findings
 
 ### [FINDING-001] [Title]
@@ -423,6 +505,7 @@ Structure the findings report as follows:
 - **Location:** [file path, function, configuration]
 - **Description:** [What was found]
 - **Evidence:** [Code snippet, configuration excerpt, or architectural observation]
+- **Boundary/Provenance Evidence:** [model-tool boundary, prompt source/trust label, and fallback path relevant to this finding]
 - **Impact:** [What an attacker could achieve]
 - **Remediation:** [Specific, actionable fix with code example if applicable]
 - **Priority:** P1 | P2 | P3 | P4
@@ -464,7 +547,7 @@ Key differences from the 2023 edition:
 
 ## 7. Common Pitfalls
 
-These are the five most frequent mistakes agents make when performing LLM security reviews:
+These are the most frequent mistakes agents make when performing LLM security reviews:
 
 1. **Reviewing only the prompt, not the data flow.** The prompt is one attack surface. The full data flow — from user input through retrieval, prompt assembly, model inference, output parsing, tool execution, and response rendering — must be traced end to end. Findings missed in output handling (LLM05) and excessive agency (LLM06) are the most common gaps.
 
@@ -475,6 +558,8 @@ These are the five most frequent mistakes agents make when performing LLM securi
 4. **Failing to enumerate tool permissions.** When function-calling or tool-use is configured, every tool must be enumerated with its permissions documented. Agents frequently overlook that a "search" tool also has write access, or that a "database" tool allows arbitrary SQL. This is the core of LLM06.
 
 5. **Scoping the review to the application layer only.** LLM security includes supply chain (LLM03) — model provenance, dependency versions, serialization formats — and infrastructure — vector database authentication, API key management, cost controls (LLM10). These are outside the application code but within scope of this review.
+
+6. **Mapping categories before proving provenance and boundaries.** A workflow that is only a read-only summarizer with a human publish gate is not the same risk as an autonomous agent with write tools. Always prove prompt source, tool authority, credential scope, fallback behavior, and downstream sinks before assigning severity.
 
 ---
 
@@ -492,7 +577,13 @@ When performing a review using this skill:
 
 ---
 
-## 9. References
+## 9. Changelog
+
+- **1.0.1** - Adds model-tool boundary mapping, prompt provenance records, fallback/degraded-mode analysis, category-mapping rationale, and boundary/provenance evidence fields to reduce false positives and catch hidden fallback/tool-output variants.
+
+---
+
+## 10. References
 
 - OWASP Top 10 for LLM Applications 2025: https://genai.owasp.org/llm-top-10/
 - OWASP LLM AI Security & Governance Checklist: https://genai.owasp.org/llm-top-10/llm-ai-security-and-governance-checklist/
