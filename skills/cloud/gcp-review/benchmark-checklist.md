@@ -41,6 +41,59 @@ resource "google_service_account_key" {
 
 Look for any `google_service_account_key` resources. GCP-managed keys (used automatically by Compute Engine, GKE, etc.) do not require explicit creation.
 
+### Workload Identity Federation -- Attribute Conditions and Service Account Impersonation Scope
+
+WIF is safer than user-managed service account keys only when the external identity trust policy is narrowly scoped.
+
+**Grep patterns:**
+
+```
+google_iam_workload_identity_pool_provider
+google_iam_workload_identity_pool
+roles/iam.workloadIdentityUser
+principalSet://iam.googleapis.com
+attribute_mapping|attribute_condition
+assertion.repository|assertion.repository_id|assertion.ref|assertion.environment
+```
+
+**Review gates:**
+
+- Provider attribute mapping should include stable claims such as repository ID, protected ref, environment, or provider-specific subject. Treat workflow name, repository name, or actor-only mappings as weak for production deploy access.
+- `attribute_condition` should restrict production impersonation to protected branches, tags, environments, or trusted repository IDs. Missing conditions are high risk for production service accounts.
+- Service account IAM should bind `roles/iam.workloadIdentityUser` at the service account level to a constrained `principalSet`, not project-wide or pool-wide principals.
+- GitHub pull request workflows from forks must not satisfy production deploy conditions.
+- Multiple providers in the same workload identity pool need provider-specific attribute conditions before sharing sensitive service accounts.
+- Human users and federated CI should not share one production deploy service account binding without separate break-glass logging and approval.
+
+```hcl
+# GOOD: repository and branch are scoped for a production deploy identity.
+resource "google_iam_workload_identity_pool_provider" "github" {
+  workload_identity_pool_id = google_iam_workload_identity_pool.ci.workload_identity_pool_id
+  attribute_mapping = {
+    "google.subject"       = "assertion.sub"
+    "attribute.repository" = "assertion.repository"
+    "attribute.repository_id" = "assertion.repository_id"
+    "attribute.ref"        = "assertion.ref"
+  }
+  attribute_condition = "assertion.repository_id == '123456789' && assertion.ref == 'refs/heads/main'"
+}
+
+resource "google_service_account_iam_member" "deploy" {
+  service_account_id = google_service_account.prod_deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/ci/attribute.repository/org/repo"
+}
+```
+
+```hcl
+# BAD: broad pool principal can let unrelated providers or repositories impersonate.
+resource "google_service_account_iam_member" "deploy" {
+  service_account_id = google_service_account.prod_deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/ci/*"
+}
+```
+
 ### CIS 1.5 -- Ensure that Service Account Has No Admin Privileges
 
 **Grep patterns:**
