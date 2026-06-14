@@ -13,7 +13,7 @@ phase: [operate, respond]
 frameworks: [MITRE-ATT&CK-v16, NIST-SP-800-61-Rev2]
 difficulty: beginner
 time_estimate: "10-20min per alert"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -56,6 +56,8 @@ Before beginning triage, gather or confirm:
 - [ ] **Asset context:** What is the affected asset? (Server, workstation, cloud instance, network device.) What is its business criticality? (Revenue-generating, customer-facing, development, test.)
 - [ ] **User context:** Who is the associated user? (Role, department, normal working hours, recent activity patterns.)
 - [ ] **Historical context:** Has this alert fired before? What was the previous disposition? Has this user or host generated related alerts recently?
+- [ ] **Suppression and grouping context:** Is any active suppression, deduplication, maintenance window, or alert grouping rule matching the detection rule, entity, source, or tenant? Capture raw event count, unique entities, first seen, last seen, match criteria, owner, approval, and expiry.
+- [ ] **Enrichment freshness:** When priority depends on asset criticality, identity role, owner, or business unit, record the enrichment source and last refresh time. Treat stale or missing enrichment as uncertainty, not proof of low risk.
 - [ ] **Threat intelligence:** Do any indicators in the alert (IPs, domains, hashes) appear in threat intelligence feeds?
 
 If some context is unavailable, proceed with available information and note gaps as assumptions.
@@ -79,6 +81,8 @@ Gather all data associated with the alert. Do not make a disposition decision un
 | **Network telemetry** | NetFlow, DNS queries, proxy logs for the source/destination | Firewall, proxy, DNS logs |
 | **Threat intelligence** | IOC lookups for IPs, domains, hashes, URLs | VirusTotal, OTX, MISP, TI platform |
 | **Previous alerts** | Historical alerts for same user, host, or IOC | SIEM, case management |
+| **Suppression/grouping metadata** | Active suppressions, dedup window, raw count, unique entities, first/last seen, rule owner, expiry, approval ticket | SIEM/SOAR rule config, case management |
+| **Context freshness** | Asset/user owner, criticality, privilege, business unit, sync timestamp, source-of-truth link | CMDB, IAM, HR, asset inventory |
 
 **NIST SP 800-61 alignment:** This phase corresponds to Section 3.2 "Detection and Analysis" -- specifically the initial analysis and validation of the alert before classification.
 
@@ -93,6 +97,7 @@ Connect the alert data with surrounding context to build a picture of what happe
 3. **Behavioral correlation:** Does this activity match known ATT&CK technique patterns? Does it match the user's or system's normal behavior baseline?
 4. **Threat intel correlation:** Do any indicators match known threat actor infrastructure, malware campaigns, or published IOCs?
 5. **Kill chain correlation:** Where does this activity fall in the attack lifecycle? Is there evidence of preceding (reconnaissance, initial access) or subsequent (persistence, lateral movement, exfiltration) stages?
+6. **Suppression correlation:** Is the alert, entity, tenant, source, or rule currently covered by an active suppression, deduplication, or maintenance rule? If yes, does the raw event count, affected-entity spread, first/last-seen window, or privileged/critical-asset involvement exceed the approved noise-reduction scope?
 
 **ATT&CK-based correlation framework:**
 
@@ -103,6 +108,20 @@ Connect the alert data with surrounding context to build a picture of what happe
 | Credential Access (TA0006) | Lateral Movement (TA0008) -- were stolen credentials used to move? |
 | Lateral Movement (TA0008) | Collection (TA0009), Exfiltration (TA0010) -- what was the objective? |
 | Command and Control (TA0011) | All tactics -- C2 implies an active intrusion; look for the full chain |
+
+### Phase 2b: Suppression and Stale-Context Confidence Gate
+
+Noise-reduction controls are allowed only when they preserve enough evidence to prove the alert is still safe to close or group. Before lowering priority because an alert is suppressed, deduplicated, grouped, or enriched as "low value," verify:
+
+| Gate | Evidence Required | Escalate When |
+|------|-------------------|---------------|
+| **Suppression match** | Suppression owner, approval link, expiry, match criteria, detection rule, entity/source scope, and last review date | Suppression is expired, ownerless, too broad, missing approval, or matches production entities outside the approved scope |
+| **Raw alert volume** | Raw event count before grouping, unique users, unique hosts/assets, unique destinations, first seen, and last seen | Volume spikes, new entity spread appears, first/last seen exceeds the approved window, or dedup hides high-severity outliers |
+| **Context freshness** | Asset criticality source and timestamp; identity role/privilege source and timestamp; business unit/owner source and timestamp | Context is older than the triage window, enrichment sync failed, owner is unknown, or identity/asset criticality conflicts across sources |
+| **Queue saturation** | Current queue depth, oldest untriaged high/critical alert age, SLA breach count, and analyst handoff status | High volume delays P1/P2 review, suppressions are added only to drain backlog, or low-severity queues contain critical assets or privileged users |
+| **Fallback uncertainty** | Documented confidence impact and alternate escalation path when enrichment, grouping, or suppression evidence is missing | Missing evidence would be the only reason to close, downgrade, or batch the alert |
+
+For bursty or rare detections, do not use low fire count alone to justify closure. A canary population, low-frequency TTP, or privileged target may still require escalation when the raw event spread or stale context changes risk.
 
 ### Phase 3: Classify
 
@@ -137,6 +156,7 @@ Assign a priority level based on the combination of asset criticality, threat se
 | Kill chain stage | Late-stage (exfiltration, impact) | Early-stage (reconnaissance) |
 | Confidence level | Multiple corroborating signals | Single low-fidelity signal |
 | Business context | During M&A, audit, or incident response | Normal operations |
+| Suppression/grouping evidence | Broad/expired suppression, growing raw volume, many unique entities, stale enrichment, SLA backlog | Owned suppression with narrow scope, current expiry, preserved raw counts, fresh asset/user context |
 
 ### Phase 4: Escalate
 
@@ -151,6 +171,9 @@ Determine whether the alert requires escalation and to whom.
 | Compromised privileged account (domain admin, cloud admin) | IR team + identity team + management |
 | Alert involves regulated data (PII, PHI, PCI) | IR team + compliance/privacy officer |
 | Analyst is uncertain about disposition after 20 minutes of investigation | Tier 2 analyst or team lead for guidance |
+| Suppression or deduplication hides raw volume, unique affected entities, first/last-seen expansion, or a high-risk asset/user | Tier 2 analyst or detection engineering lead |
+| Asset or identity enrichment is stale, missing, or conflicting and would otherwise lower priority | Tier 2 analyst, asset owner, or identity team |
+| Alert queue saturation risks missing P1/P2 SLA or delays review of high-severity outliers | SOC lead or incident commander for surge handling |
 | Alert matches a known active threat campaign | Threat intelligence team + IR team |
 | Multiple correlated alerts suggest a coordinated attack | IR team lead for incident declaration |
 
@@ -233,6 +256,18 @@ Produce the triage decision as a structured report:
 - **Lateral:** [Related alerts on other hosts/users]
 - **Threat Intel:** [IOC match results]
 - **Kill Chain Position:** [Where this falls in the attack lifecycle]
+
+### Suppression and Context Confidence
+| Field | Value |
+|-------|-------|
+| Active Suppression/Grouping | [None / Rule ID, owner, expiry, approval link] |
+| Raw Event Count | [Count before deduplication or suppression] |
+| Unique Entities | [Users / hosts / assets / destinations] |
+| First Seen / Last Seen | [Timestamp range] |
+| Asset Context Freshness | [Source, timestamp, owner, criticality] |
+| Identity Context Freshness | [Source, timestamp, role, privilege level] |
+| Queue Saturation | [Queue depth, oldest P1/P2 age, SLA risk] |
+| Uncertainty Handling | [Escalation path or reason confidence remains acceptable] |
 
 ### Recommended Actions
 - [ ] [Action 1 -- e.g., isolate host, disable account, block IP]
@@ -319,6 +354,10 @@ Investigating an alert in isolation without checking for activity before and aft
 
 Waiting for complete certainty before escalating a high-priority alert costs response time. NIST SP 800-61 recommends erring on the side of over-notification. If 20 minutes of investigation has not resolved the disposition and the alert involves a critical asset or privileged account, escalate to Tier 2 or the IR team with your current findings and continue investigation in parallel.
 
+### Pitfall 6: Trusting Suppression or Stale Enrichment as Proof of Low Risk
+
+Suppression, deduplication, and alert grouping can hide burst attacks, new affected entities, and high-risk outliers. Asset and identity enrichment can also become stale during inventory sync failures, role changes, or incident response. Never downgrade or close an alert solely because it was suppressed, grouped, or enriched as low criticality. Preserve raw counts, unique-entity spread, first/last-seen timestamps, suppression scope, and context freshness; escalate uncertainty when those fields are missing or older than the triage window.
+
 ---
 
 ## 8. Prompt Injection Safety Notice
@@ -333,7 +372,14 @@ This skill processes user-supplied content that may include alert payloads, log 
 
 ---
 
-## 9. References
+## 9. Version History
+
+- **v1.0.1** -- Added suppression/deduplication review, raw event and unique-entity evidence, first/last-seen preservation, asset and identity context freshness checks, queue saturation handling, uncertainty escalation, and output fields for suppression/context confidence.
+- **v1.0.0** -- Initial alert triage playbook with collect, correlate, classify, and escalate workflow.
+
+---
+
+## 10. References
 
 1. **NIST SP 800-61 Rev 2 -- Computer Security Incident Handling Guide** -- https://csrc.nist.gov/publications/detail/sp/800-61/rev-2/final
 2. **MITRE ATT&CK Enterprise Matrix v16** -- https://attack.mitre.org/matrices/enterprise/
