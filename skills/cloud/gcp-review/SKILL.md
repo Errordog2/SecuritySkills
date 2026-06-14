@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [CIS-GCP-v2.0.0]
 difficulty: intermediate
 time_estimate: "60-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -88,8 +88,31 @@ For detailed CIS benchmark checklist items with specific Terraform patterns, gre
 
 ---
 
-### Step 9: Compile Assessment Report
+### Step 9: Workload Identity Federation Trust Boundary Gate
 
+Workload Identity Federation (WIF) is the preferred replacement for long-lived service account keys, but it is only safe when the identity provider, mapped attributes, attribute conditions, and service account bindings are narrowly scoped.
+
+For every `google_iam_workload_identity_pool_provider`, workload identity pool, and `roles/iam.workloadIdentityUser` binding, document:
+
+- **Provider and issuer:** OIDC/SAML/AWS provider identity, issuer URI, audience, and whether multiple providers share one pool.
+- **Attribute mapping:** which external claims are mapped to `google.subject` and custom attributes such as repository, repository ID, ref, workflow, environment, actor, or branch.
+- **Attribute condition:** whether immutable or protected claims restrict the trust boundary, for example repository ID plus protected branch or environment. Name-only claims can go stale after repository rename or transfer.
+- **Principal scope:** whether bindings use a specific `principalSet` path such as `attribute.repository/org/repo` or a broad pool-wide principal.
+- **Service account separation:** whether production deploy service accounts are bound only to trusted CI principals and separated from human users, break-glass users, and non-production CI.
+- **Negative evidence:** logs, policy simulation, tests, or review evidence showing impersonation is denied from an untrusted repository, fork pull request, branch, provider, or environment.
+
+**High-risk patterns to report:**
+
+- A GitHub/OIDC pool lets any repository in an organization impersonate a production deployment service account.
+- Attribute mappings rely only on mutable or ambiguous claims such as workflow name, actor name, or repository name without stable repository ID, branch, or environment restrictions.
+- `roles/iam.workloadIdentityUser` is granted to a pool-wide `principalSet` rather than a constrained attribute path.
+- Pull-request workflows from forks can receive tokens that satisfy production deployment conditions.
+- Human users and federated CI share the same production service account binding, weakening attribution and incident response.
+- Multiple providers in one pool can reach the same service account without provider-specific attribute conditions.
+
+**False-positive guard:** Do not report WIF solely because it grants `roles/iam.workloadIdentityUser`. A binding is usually acceptable when it uses exact `principalSet` attribute paths, stable claims, protected branch or environment conditions, service-account-level scope, separate human and CI paths, and evidence that untrusted refs/providers are denied.
+
+### Step 10: Compile Assessment Report
 
 Produce the final report using the structure defined in the Output Format section.
 
@@ -150,6 +173,15 @@ Produce the final report using the structure defined in the Output Format sectio
 - **Evidence:** <specific configuration or code snippet>
 - **Remediation:** <specific fix with code example>
 
+### Workload Identity Federation Trust Summary
+- Providers reviewed: <N>
+- Production service accounts with WIF bindings: <list>
+- Attribute mappings verified: <yes / no / partial>
+- Attribute conditions verified: <protected branch/environment/repository ID / broad / missing>
+- Principal scopes: <exact principalSet / org-wide / pool-wide>
+- Human and CI impersonation separation: <separate / shared / unknown>
+- Negative impersonation evidence: <logs/tests/policy simulation / missing>
+
 ### Prioritized Remediation Plan
 
 1. **[Critical]** CIS X.Y -- <action item>
@@ -194,6 +226,9 @@ Produce the final report using the structure defined in the Output Format sectio
 4. **Cloud SQL authorized_networks vs. private IP.** CIS 6.5 flags `0.0.0.0/0` in authorized networks, but CIS 6.6 goes further and recommends disabling public IP entirely in favor of private networking.
 5. **BigQuery dataset-level vs. table-level CMEK.** CIS 7.2 checks table-level encryption, while CIS 7.3 checks the dataset default. Both should be evaluated independently.
 6. **Default compute service account identification.** The default SA follows the pattern `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. Grep for this pattern, not just the string "default."
+7. **Treating Workload Identity Federation as automatically safe.** WIF removes static keys, but an overbroad `principalSet` or missing attribute condition can let any repository, branch, provider, or forked workflow impersonate a sensitive service account.
+8. **Trusting mutable identity claims.** Repository names, workflow names, and actor names can change or be ambiguous. Prefer stable repository IDs, protected branch refs, environment claims, and provider-specific conditions for production deploy identities.
+9. **Mixing human and CI impersonation paths.** A production deploy service account shared by federated CI and human users makes attribution and incident containment weaker. Review IAM bindings at the service account level.
 
 ---
 
@@ -225,4 +260,5 @@ Produce the final report using the structure defined in the Output Format sectio
 
 ## Changelog
 
+- **1.0.1** -- Added Workload Identity Federation provider attribute mapping, attribute condition, principalSet scope, protected branch/environment, and service account separation gates.
 - **1.0.0** -- Initial release. Full coverage of CIS Google Cloud Platform Foundation Benchmark v2.0.0 sections 1 through 7.
