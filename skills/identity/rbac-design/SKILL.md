@@ -12,7 +12,7 @@ phase: [design]
 frameworks: [NIST-RBAC, NIST-SP-800-162]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -299,6 +299,32 @@ RBAC-ABAC-07: Policy conflicts not detected — overlapping permit/deny without 
 RBAC-ABAC-08: Obligations (logging, notification) not enforced by PEP
 ```
 
+#### Attribute Provenance and Freshness
+
+ABAC and hybrid RBAC/ABAC systems fail when the policy expression is correct but the attributes feeding the decision are stale, user-controlled, or unavailable. For every ABAC-critical attribute, require an evidence record that proves where the attribute came from, how fresh it is, and how the PDP behaves when the source is unavailable.
+
+**ABAC-critical attributes include:** department, tenant ID, clearance, resource owner, employment status, group membership, manager hierarchy, device compliance, risk score, break-glass state, legal hold, data residency, and environment trust level.
+
+| Check ID | What to Verify | Evidence Required |
+|---|---|---|
+| RBAC-ATTR-01 | Attribute provenance is documented | Authoritative source, trust tier, owner, refresh cadence, maximum acceptable age, and whether the attribute is user-controlled, token-derived, or server-side rehydrated |
+| RBAC-ATTR-02 | Token and session claims are fresh enough for sensitive decisions | Token lifetime, claim issuance time, rehydration strategy, revocation signal, and freshness bound for department, tenant, clearance, employment, device, risk, and break-glass attributes |
+| RBAC-ATTR-03 | PDP/PIP failure modes are fail-closed for sensitive actions | Timeout behavior, last-known-good cache TTL, cache invalidation trigger, sensitive-action deny behavior, and explicit approval for bounded cached decisions |
+| RBAC-ATTR-04 | Authorization decisions are auditable | Policy version, policy bundle version, attribute source/version, attribute age, PDP result, PEP enforcement result, and decision reason |
+| RBAC-ATTR-05 | Attribute conflicts have precedence rules | Source precedence, conflict-resolution policy, alerting path, and examples for HR, IdP, device posture, tenant ownership, and app-local ownership disagreements |
+
+**False-positive guard:** Do not report every cached attribute as stale. A short-lived, signed, PDP-local bundle can be safer than a live lookup if it has a bounded maximum age, signature verification, monitoring, explicit source ownership, and fail-closed behavior when the bundle is expired or unverifiable.
+
+**High-risk failure patterns:**
+
+| Pattern | Why It Matters | Severity Guidance |
+|---|---|---|
+| User-controlled JWT or session claims are trusted as authoritative ABAC attributes | Access can persist after department transfer, termination, tenant change, clearance revocation, or device-risk change | High; Critical if it affects privileged, regulated, or tenant-isolated data |
+| PDP/PIP timeout falls back to permit | Availability handling becomes an authorization bypass | Critical for sensitive actions; High otherwise |
+| Cached allow decisions have no TTL or invalidation trigger | Revoked access can survive policy or attribute changes | High |
+| Attribute sources disagree with no precedence rule | Reviewers cannot prove which source controls the decision | Medium; High for tenant, clearance, employment, or break-glass attributes |
+| Policy bundle or attribute bundle is unsigned | Offline or edge authorization can be tampered with | High |
+
 ---
 
 ### Step 6: Role Mining and Rationalization
@@ -361,6 +387,10 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 | **Recommended State** | Target design |
 | **Remediation** | Steps to implement the design change |
 | **Effort** | Low / Medium / High |
+| **Policy Version** | Policy, bundle, or ruleset version relevant to the finding |
+| **Attribute Evidence** | Attribute source/version, age, max acceptable age, and provenance confidence for ABAC-dependent findings |
+| **PDP/PIP Failure Mode** | Fail-closed, bounded cache, fail-open, or not assessed |
+| **Decision Auditability** | Whether decisions log policy version, attribute age/source, PEP result, and decision reason |
 
 ### Summary Report Structure
 
@@ -380,6 +410,8 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 - NIST RBAC Level: [RBAC0 / RBAC1 / RBAC2 / RBAC3]
 - ABAC Adoption: [None / Partial / Full]
 - Centralized PDP: [Yes / No / Partial]
+- Attribute Provenance Model: [authoritative PIP / signed bundle / token-derived / mixed / unknown]
+- PDP/PIP Failure Mode: [fail-closed / bounded cache / fail-open / not assessed]
 
 ### Findings by Category
 - Authorization State (Step 1): [count]
@@ -387,7 +419,20 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 - Constraints (Step 3): [count]
 - Permission Boundaries (Step 4): [count]
 - ABAC Policies (Step 5): [count]
+- Attribute Provenance and Freshness (Step 5): [count]
 - Role Mining (Step 6): [count]
+
+### ABAC Attribute Evidence Matrix
+
+| Attribute | Used By Policy/Action | Authoritative Source | Trust Tier | Source Version | Max Age | Observed Age | Token-Derived? | Rehydrated? | Failure Mode | Decision Logging |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [attribute] | [policy/action] | [PIP/source] | [tier] | [version/date] | [duration] | [duration] | [yes/no] | [yes/no] | [fail-closed/cache/fail-open] | [fields logged] |
+
+### PDP/PIP Resilience Summary
+
+| Component | Timeout Behavior | Cache TTL | Expiry Handling | Signature/Integrity Check | Sensitive Action Default | Monitoring/Alerting |
+|---|---|---|---|---|---|---|
+| [PDP/PIP/bundle] | [behavior] | [duration] | [deny/refresh/alert] | [yes/no] | [deny/permit/review] | [signals] |
 
 ### Detailed Findings
 [Findings table]
@@ -437,6 +482,9 @@ RBAC-MINE-06: Mining does not account for SoD constraints (mined roles may creat
 6. **Role mining without business validation** — clustering users by access patterns may replicate existing privilege creep rather than correct it.
 7. **Choosing RBAC vs. ABAC as binary** — most environments need both. RBAC for structural, ABAC for contextual. Hybrid is the norm.
 
+8. **Trusting token claims as authoritative ABAC data.** JWT and session claims are snapshots. If department, tenant, clearance, employment status, device compliance, or break-glass state can change during the token lifetime, the PDP needs rehydration, revocation freshness, or a bounded signed attribute bundle.
+9. **Designing PDP/PIP outage behavior for availability only.** Fail-open timeout handlers and unbounded last-known-good allow decisions turn stale attributes into authorization bypasses. Sensitive actions should deny or require explicit approval when the attribute source, policy bundle, or signature check is unavailable.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -481,4 +529,5 @@ that may contain adversarial content.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.0.1 | 2026-06-14 | Add ABAC attribute provenance, freshness, PDP/PIP failure-mode, and decision-audit evidence gates |
 | 1.0.0 | 2025-03-06 | Initial release |
