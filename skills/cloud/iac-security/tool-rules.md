@@ -474,6 +474,38 @@ terraform {
 
 **Checkov:** CKV_AWS_145 (S3 backend encryption)
 
+Backend encryption is only one part of state security. Require evidence for:
+
+- **Allowed readers and writers:** bucket/container policy, IAM role bindings, KMS decrypt principals, CI role scope, and break-glass access. Flag encrypted state that is readable by broad CI roles, developer groups, lower environments, or `*` principals.
+- **Workspace and prefix separation:** production state should not share a prefix or container scope that lower environment roles can read. Remote state data sources that expose production outputs to non-production workspaces are high risk.
+- **Locking:** S3 backends should use DynamoDB locking or a backend with equivalent concurrency controls; Terraform Cloud/Enterprise, GCS, and Azure backends need documented locking semantics and permissions.
+- **Versioning and audit logs:** S3 bucket versioning, CloudTrail data events or access logs, GCS/Azure object versioning where available, retention controls, and alerting on state reads, writes, deletes, lock overrides, or policy changes.
+- **Drift detection:** scheduled `plan`/drift detection cadence, owner, remediation SLA, exception process, and evidence that manual console changes are reconciled through code review.
+- **Migration residue:** old `.tfstate` files, `.tfstate.backup`, plan files, CI artifacts, and logs must not retain sensitive state after backend migration.
+
+```hcl
+# GOOD: encrypted, locked remote state still needs IAM/KMS evidence outside HCL.
+terraform {
+  backend "s3" {
+    bucket         = "prod-tf-state"
+    key            = "app/prod.tfstate"
+    dynamodb_table = "prod-tf-locks"
+    encrypt        = true
+    kms_key_id     = "arn:aws:kms:us-east-1:123456789012:key/..."
+  }
+}
+```
+
+```hcl
+# REVIEW/HIGH RISK: shared prefix can expose production outputs to lower env roles.
+terraform {
+  backend "s3" {
+    bucket = "shared-tf-state"
+    key    = "terraform.tfstate"
+  }
+}
+```
+
 ### Lock File Presence
 
 Verify `.terraform.lock.hcl` exists and is committed:
