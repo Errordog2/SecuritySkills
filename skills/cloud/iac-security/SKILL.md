@@ -13,7 +13,7 @@ phase: [build, review]
 frameworks: [OWASP-IaC-Security, SLSA-v1.0, CIS-Benchmarks]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -101,7 +101,31 @@ For detailed tool-specific rule sets, detection patterns, vulnerable code exampl
 
 ---
 
-### Step 10: Compile Assessment Report
+### Step 10: Terraform State Backend and Drift Evidence Gate
+
+Terraform state is a high-value artifact because it can contain resource identifiers, derived secrets, provider metadata, and sensitive outputs even when variables are marked `sensitive`. Do not treat encrypted remote state as automatically safe. Review the backend configuration and the operational controls around it.
+
+For each Terraform backend, document the following evidence:
+
+- **Backend storage:** type, bucket/container name, key/prefix, workspace mapping, and whether lower environments can read production state or outputs.
+- **Encryption and keys:** encryption setting plus KMS/key-vault key identity, key policy, and allowed decrypt principals. Provider-managed default encryption is a baseline, not proof of least privilege.
+- **Access control:** bucket/container ACL, IAM/resource policy, CI role permissions, break-glass access, and whether broad roles such as `*`, organization-wide CI, or lower-environment deploy roles can read state.
+- **Locking and concurrency:** DynamoDB lock table, Terraform Cloud/Enterprise locking, GCS/Azure locking semantics, or equivalent evidence that concurrent applies cannot corrupt state.
+- **Versioning, logging, and retention:** object versioning, access logs or data events, deletion protection, retention, and alerting on state reads, writes, deletes, and lock overrides.
+- **Drift operations:** automated drift detection cadence, plan/apply owner, remediation SLA, exception owner, and evidence that manual console changes are reconciled back through IaC review.
+- **Migration residue:** checks for old `.tfstate` copies, `.tfstate.backup`, plan files, CI artifacts, logs, and partial backend config that may override secure defaults.
+
+**High-risk patterns to report:**
+
+- Remote state encrypted but readable by broad CI, developer, or cross-account roles without a business need.
+- Workspaces or prefixes that let a lower environment role read production state or production module outputs.
+- State locking configured but no drift detection cadence, owner, or reconciliation workflow.
+- Terraform outputs that contain derived secrets, tokens, passwords, connection strings, or private endpoints and are exposed through remote state data sources.
+- Partial backend configuration in CI that changes buckets, prefixes, credentials, or locking behavior away from reviewed defaults.
+
+**False-positive guard:** A remote backend with encryption, exact scoped principals, per-environment prefixes or accounts, locking, versioning, access logging, and a documented drift remediation owner should not be reported solely because Terraform state can contain sensitive data. Report only the missing or over-broad control with supporting evidence.
+
+### Step 11: Compile Assessment Report
 
 Produce the final report using the structure defined in the Output Format section.
 
@@ -167,7 +191,11 @@ Produce the final report using the structure defined in the Output Format sectio
 - Module pinning: <pinned / partially pinned / unpinned>
 - Provider pinning: <pinned / unpinned>
 - State encryption: <encrypted / unencrypted>
+- State key ownership: <CMK/key policy evidence or provider-managed/default>
+- State access scope: <least privilege / broad CI role / cross-environment read risk>
 - State locking: <enabled / disabled>
+- State versioning/logging: <enabled / partial / missing>
+- Drift detection: <cadence, owner, last evidence, remediation SLA>
 - Lock file committed: <yes / no>
 
 ### Prioritized Remediation Plan
@@ -230,6 +258,9 @@ This skill applies checks equivalent to the following high-impact rules:
 5. **Confusing `aws_s3_bucket_acl` with `aws_s3_bucket_public_access_block`.** The public access block overrides ACLs. Check both, but the access block is the stronger control.
 6. **Terraform state file secrets.** Even when variables are marked `sensitive`, they may appear in plaintext in the state file. Verify state encryption and access controls.
 7. **Provider-specific encryption defaults.** Some providers encrypt by default (e.g., AWS S3 since January 2023). Know the defaults before flagging missing explicit encryption configuration.
+8. **Assuming encrypted remote state is least-privilege state.** Encryption does not prevent broad CI roles, lower-environment roles, or remote-state data sources from reading sensitive production outputs. Review allowed principals and workspace/prefix separation.
+9. **Treating locking as drift detection.** State locks prevent concurrent writes; they do not detect manual console changes or guarantee that drift is reconciled through code review.
+10. **Ignoring backend overrides in CI.** Partial backend config supplied by CI can override secure defaults in source-controlled Terraform files. Review the plan/apply pipeline inputs, not only `backend` blocks.
 
 ---
 
@@ -265,4 +296,5 @@ This skill applies checks equivalent to the following high-impact rules:
 
 ## Changelog
 
+- **1.0.1** -- Added Terraform state backend ACL, lock, versioning/logging, drift detection, cross-environment read, and backend override evidence gates.
 - **1.0.0** -- Initial release. Coverage of eight security domains across Terraform, CloudFormation, Pulumi, and Bicep with Checkov/tfsec/KICS rule equivalents.
