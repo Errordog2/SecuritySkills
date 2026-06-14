@@ -11,7 +11,7 @@ phase: [design, build, review]
 frameworks: [OWASP-API-Security-2023, OWASP-ASVS]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -92,7 +92,7 @@ The final review output must be structured as follows:
 **API Style:** [REST / GraphQL / gRPC / Hybrid]
 **Specification:** [OpenAPI spec path, if applicable]
 **Date:** [review date]
-**Reviewer:** AI Agent -- api-security skill v1.0.0
+**Reviewer:** AI Agent -- api-security skill v1.0.1
 
 ### Summary
 
@@ -184,6 +184,34 @@ Deeply nested or highly complex queries can exhaust server resources (API4:2023)
 ### Field-Level Authorization
 
 Unlike REST, where authorization can be enforced per endpoint, GraphQL requires authorization at the resolver level. Every resolver that returns sensitive data or performs a privileged mutation must independently verify permissions.
+
+### Tenant-Scoped Batching and Cache Boundaries
+
+GraphQL batching layers such as DataLoader can accidentally turn a correct resolver check into a cross-tenant or cross-role data leak if the loader cache outlives a request or keys only by object ID.
+
+Treat the following patterns as review gates for BOLA (API1:2023), BOPLA (API3:2023), and BFLA (API5:2023):
+
+- **Loader lifecycle:** Sensitive loaders must be created per request or per authenticated execution context. A process-wide loader for tenant-scoped objects is a finding unless every cache entry is partitioned by the full authorization scope and has explicit invalidation.
+- **Cache key scope:** Cache keys for sensitive objects must include the relevant tenant, subject, role, permission, impersonation state, and resource scope. A key such as `userId -> user` is unsafe in a multi-tenant API.
+- **False positive check:** A per-request loader whose batch function and `cacheKeyFn` both include the tenant or authorization boundary is normally benign. Do not report it as a leak unless evidence shows the cache crosses requests, tenants, roles, or impersonation sessions.
+- **Child resolver leakage:** Field masking in a parent resolver is not sufficient if a batched child resolver can reuse a warmer, less-restricted object instance and return hidden fields.
+- **Warmed-cache tests:** Require tests that first warm the cache as one tenant, role, or impersonated subject, then assert another tenant, lower-privilege role, or normal session cannot read the cached object.
+
+```js
+// Benign when created per request and scoped by tenant.
+const loader = new DataLoader(ids => loadUsers(ctx.tenantId, ids), {
+  cacheKeyFn: id => `${ctx.tenantId}:${ctx.subjectId}:${ctx.role}:${id}`
+});
+```
+
+```js
+// Finding: process-wide cache keyed only by object ID.
+const userLoader = new DataLoader(ids => loadUsers(ids));
+```
+
+Persisted queries, APQ, and CDN caches require the same execution-time authorization discipline. An allowlisted GraphQL operation hash is not proof that the current viewer may execute it. Reviewers must verify that authorization runs at execution time and that any APQ/CDN response cache key includes viewer, tenant, role, and resource scope rather than operation hash alone.
+
+Subscriptions need event-level authorization. Authorizing the initial WebSocket connection is not sufficient if later pushed events can cross tenant or permission boundaries. Each event resolver must re-check the current subject, tenant membership, impersonation state, and resource access before publishing sensitive data.
 
 ### Alias-Based Attacks
 
