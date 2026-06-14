@@ -14,7 +14,7 @@ phase: [build, review, operate]
 frameworks: [OWASP-LLM03-2025, SLSA-v1.0, MITRE-ATLAS]
 difficulty: advanced
 time_estimate: "45-90min"
-version: "1.0.2"
+version: "1.0.3"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -75,6 +75,8 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Model source and registry | README, download scripts, Dockerfiles, CI/CD configs | Determines provenance trust level |
 | Model format and serialization | Weight files (.bin, .safetensors, .pt, .pkl, .onnx) | Pickle-based formats enable arbitrary code execution |
 | Hash/checksum verification code | Download scripts, model loading code | Confirms integrity verification exists |
+| Derived artifact lineage | Conversion manifests, quantization configs, model registry records, build logs | Proves ONNX/GGUF/TensorRT/Core ML/TFLite/int8/int4 artifacts came from the reviewed source weights |
+| Runtime provider configuration | Dockerfiles, serving manifests, environment variables, ONNX Runtime/TensorRT/vLLM/llama.cpp flags | Confirms production provider, precision, graph optimizations, and custom ops match tested behavior |
 | Model card or documentation | Model registry page, repo docs | Reveals training data, intended use, known limitations |
 | Training data sources | Data pipeline code, dataset configs, documentation | Identifies poisoning surface and licensing risk |
 | Fine-tuning pipeline | Training scripts, configs, orchestration code | Exposes data injection and pipeline tampering risks |
@@ -130,6 +132,77 @@ Glob: **/config.json
 | Model pulled from unverified third-party source (not the original publisher) | High |
 | No model card or provenance documentation available | Medium |
 | Checksums verified but against values stored in the same repository as the model (self-referential) | Medium |
+
+---
+
+### Step 1b -- Converted and Quantized Artifact Equivalence
+
+Treat every converted or quantized model as a derived supply chain artifact, not as interchangeable with the source checkpoint. This includes ONNX, GGUF/GGML, TensorRT engines, OpenVINO IR, Core ML, TFLite, AWQ/GPTQ/QLoRA outputs, int8/int4 variants, tokenizer conversions, and packaged model bundles inside inference images.
+
+**What to look for in code and configuration:**
+
+- Conversion jobs that transform a pinned source model into a production artifact without recording the exact source revision, source hash, converter image digest, converter version, command line, quantization configuration, calibration dataset, and output hash.
+- Converter containers or CLI tools pulled by mutable tags such as `latest`, unpinned GitHub Actions, or unreviewed custom operators/plugins.
+- Quantized artifacts promoted without task-specific equivalence tests. Quantization can safely change outputs, but accepted tolerance thresholds, regression datasets, and safety/adversarial probes must be defined.
+- Tokenizer, pre/post-processing, or config files converted separately from weights without a shared manifest tying the complete bundle to the same source revision.
+- Air-gapped inference images that skip live registry downloads but lack ingestion attestations proving the bundled model was verified before packaging.
+
+**Detection methods using allowed tools:**
+
+```
+# Find conversion and quantization paths
+Grep: "quantiz|int8|int4|gguf|ggml|onnx|tensorrt|trtexec|openvino|coreml|tflite|AWQ|GPTQ|optimum-cli" in **/*.{py,sh,yaml,yml,json,Dockerfile}
+Grep: "calibration|representative_dataset|dynamic_axes|external_data|graph_optimization|execution_provider" in **/*.{py,sh,yaml,yml,json}
+Grep: "converter|conversion|export.*onnx|from_pretrained.*provider|TensorrtExecutionProvider|CUDAExecutionProvider|OpenVINOExecutionProvider" in **/*.{py,sh,yaml,yml}
+
+# Check for lineage and immutability evidence
+Grep: "source_revision|source_sha256|model_digest|converter_digest|equivalence|regression|attestation|provenance" in **/*.{json,yaml,yml,md}
+Grep: "latest|nightly|main" in **/Dockerfile* **/*.yaml **/*.yml **/*.sh
+```
+
+**Required evidence for derived artifacts:**
+
+| Evidence | Why It Matters |
+|---|---|
+| Source model identity | Binds the derived artifact to repo, revision, file hash, and model card reviewed in Step 1 |
+| Converter identity | Pins converter package, container image digest, custom op/plugin source, and command arguments |
+| Quantization/calibration identity | Records quantization mode, precision, representative dataset, and calibration hash |
+| Equivalence report | Shows task metrics, tolerance thresholds, safety probes, and known acceptable drift |
+| Output artifact hash | Lets deployment verify the exact ONNX/GGUF/TensorRT/Core ML/TFLite/int8/int4 artifact |
+| Promotion approval | Captures reviewer, owner, date, rollback path, and target deployment scope |
+
+**What constitutes a finding:**
+
+| Condition | Severity |
+|---|---|
+| Derived production artifact has no source revision/hash or conversion attestation | High |
+| Converter image/tool is mutable, unsigned, or uses unreviewed custom ops/plugins | High |
+| Quantized/converted artifact promoted without equivalence or regression evidence | High |
+| Runtime tokenizer/config bundle is not tied to the same source manifest as weights | Medium |
+| Calibration dataset identity or quantization tolerance is undocumented | Medium |
+
+### Step 1c -- Runtime Provider and Optimization Drift
+
+Verify that the reviewed artifact is executed by the same runtime provider, precision mode, graph optimizer, and plugin set used during equivalence testing. Runtime provider drift can change security and safety behavior even when the model file hash is unchanged.
+
+**Provider-specific evidence to collect:**
+
+| Runtime | Evidence |
+|---|---|
+| ONNX Runtime | Execution provider order, graph optimization level, external data paths, custom op libraries, CPU/GPU fallback behavior |
+| TensorRT / CUDA | Engine build command, precision flags, plugin libraries, dynamic shape profile, GPU driver/CUDA/cuDNN versions |
+| OpenVINO / Core ML / TFLite | Target device, delegate/provider settings, conversion version, fused graph metadata |
+| llama.cpp / GGUF | Quantization type, chat template/tokenizer hash, backend flags, GPU layer offload, rope/context settings |
+| vLLM / TGI / Triton | Model loader, quantization backend, tokenizer/config path, tensor-parallel settings, plugin/model repository mount |
+
+**Finding triggers:**
+
+- Production uses a different provider, precision flag, graph optimization level, plugin path, tokenizer, or fallback behavior than the equivalence report.
+- GPU-to-CPU fallback is allowed but not logged or surfaced in deployment metadata.
+- Custom ops/plugins are loaded from writable volumes, unpinned packages, or paths outside the reviewed artifact bundle.
+- The deployment can silently rebuild TensorRT/OpenVINO/Core ML/TFLite artifacts at startup without preserving provenance and output hashes.
+
+**Fail-closed expectation:** If the deployed provider or optimization settings differ from the reviewed and tested configuration, require a new equivalence report before promotion.
 
 ---
 
@@ -462,7 +535,7 @@ Assess whether architectural and procedural controls exist to detect model backd
 | Severity | Criteria | Response SLA |
 |---|---|---|
 | **Critical** | Arbitrary code execution via model loading, known exploited CVE in inference path, or confirmed model tampering. Exploitation requires no special access beyond normal deployment flow. | Immediate -- block deployment |
-| **High** | No provenance verification on production models, uncontrolled training data pipeline, or dangerous deserialization patterns. Clear attack path exists. | 7 days -- remediate before next release |
+| **High** | No provenance verification on production models, uncontrolled training data pipeline, dangerous deserialization patterns, unpinned converter toolchains, or converted/quantized artifacts without equivalence evidence. Clear attack path exists. | 7 days -- remediate before next release |
 | **Medium** | Incomplete model documentation, missing reproducibility controls, or absent behavioral testing. Exploitation requires specific conditions or insider access. | 30 days -- schedule remediation |
 | **Low** | Defense-in-depth gaps, minor documentation omissions, or best practice deviations with limited direct risk. | 90 days -- track in backlog |
 | **Informational** | Recommendations for improvement with no current exploitable risk. | No SLA -- advisory |
@@ -487,10 +560,22 @@ Assess whether architectural and procedural controls exist to detect model backd
 |---|---|---|---|---|---|
 | [name] | [source] | [format] | [Yes/No] | [Yes/No] | [Complete/Partial/Missing] |
 
+## Derived Artifact Inventory
+
+| Artifact | Source Revision / Hash | Converter Tool / Digest | Quantization / Conversion Config | Calibration Dataset | Output Hash | Equivalence Evidence |
+|---|---|---|---|---|---|---|
+| [model-int8.onnx] | [repo@revision, sha256] | [tool/image@sha256] | [dynamic-int8 / TensorRT FP16 / GGUF Q4_K_M] | [dataset/hash or N/A] | [sha256] | [report/tolerance/pass-fail] |
+
+## Runtime Provider Evidence
+
+| Deployment | Runtime Provider | Optimization / Precision | Custom Ops / Plugins | Fallback Behavior | Matches Equivalence Test |
+|---|---|---|---|---|---|
+| [service/image] | [CPUExecutionProvider / TensorRT / llama.cpp / TFLite] | [graph level, FP16, int8, GPU offload] | [paths or none] | [logged failover / fail-closed] | [Yes/No] |
+
 ## Findings
 
 ### Finding [N]: [Title]
-- **Category:** [Provenance | Training Data | Fine-Tuning Pipeline | Inference Dependency | Model Card | Backdoor Detection]
+- **Category:** [Provenance | Derived Artifact | Runtime Provider | Training Data | Fine-Tuning Pipeline | Inference Dependency | Model Card | Backdoor Detection]
 - **Severity:** [Critical | High | Medium | Low | Informational]
 - **OWASP LLM Category:** LLM03:2025 -- Supply Chain Vulnerabilities
 - **MITRE ATLAS Technique:** [technique ID and name]
@@ -506,6 +591,8 @@ Assess whether architectural and procedural controls exist to detect model backd
 | Domain | Current State | Target State | Gap Severity |
 |---|---|---|---|
 | Model provenance | [description] | [recommendation] | [severity] |
+| Derived artifact lineage | [description] | [recommendation] | [severity] |
+| Runtime provider equivalence | [description] | [recommendation] | [severity] |
 | Training data lineage | [description] | [recommendation] | [severity] |
 | Fine-tuning pipeline | [description] | [recommendation] | [severity] |
 | Inference dependencies | [description] | [recommendation] | [severity] |
@@ -546,6 +633,18 @@ Assess whether architectural and procedural controls exist to detect model backd
 4. **Assuming Hugging Face models are vetted.** Hugging Face Hub is a hosting platform, not a curation service. Any user can upload any model. While Hugging Face has introduced malware scanning and model signing capabilities, the majority of hosted models have no cryptographic provenance. Treat Hugging Face models as untrusted artifacts requiring verification, the same way you treat npm packages.
 
 5. **Evaluating models only on benchmarks.** Standard benchmarks measure general capability, not supply chain integrity. A backdoored model will perform normally on benchmarks by design. Behavioral differential testing with curated, domain-specific test sets that probe for targeted manipulation is required to surface backdoors.
+
+6. **Assuming converted or quantized artifacts inherit source-model trust.** A pinned `safetensors` source can still produce an unsafe ONNX, GGUF, TensorRT, Core ML, TFLite, int8, or int4 derivative if the converter image, custom ops, tokenizer conversion, calibration dataset, or runtime provider is mutable or untested. Quantization drift can be benign, but only when task-specific tolerances and regression/safety probes are documented.
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0.3 | 2026-06-14 | Added converted/quantized artifact lineage, equivalence, and runtime-provider drift gates. |
+| 1.0.2 | 2026-06-14 | Expanded model supply chain coverage for MCP-related risks. |
+| 1.0.0 | 2025-03-06 | Initial release. |
 
 ---
 
