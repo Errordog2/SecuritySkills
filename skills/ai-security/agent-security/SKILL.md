@@ -14,7 +14,7 @@ phase: [design, build, review]
 frameworks: [OWASP-Agentic-AI, NIST-AI-RMF-1.0]
 difficulty: advanced
 time_estimate: "60-120min"
-version: "1.0.2"
+version: "1.0.3"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -80,6 +80,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Tool/function definitions | Code files defining tool schemas, OpenAPI specs, MCP server configs | Determines what each agent can do and with what parameters |
 | Permission/IAM configuration | Cloud IAM, role definitions, service account configs, .env files | Reveals whether least-privilege is enforced |
 | Human approval gate implementation | Workflow code, UI code, approval service configs | Determines if HITL is architecturally sound or bypassable |
+| Runtime policy evaluation traces | Policy engine logs, authorization decisions, tool broker logs, approval service logs | Proves effective tool access, denied actions, and policy inputs instead of relying on declared roles |
 | Agent identity and credential management | Auth middleware, secret managers, token configs | Exposes credential scope and rotation practices |
 | Multi-agent communication protocol | Message bus configs, inter-agent APIs, shared state stores | Identifies trust boundary violations |
 | Audit logging implementation | Logger configs, log pipeline code, SIEM integration | Determines forensic capability |
@@ -137,8 +138,10 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 - **Dynamic vs. static tool sets:** Can the agent's tool set change at runtime? If an orchestrator dynamically assigns tools, what governs which tools are assigned?
 - **Per-session vs. permanent tool access:** Is tool access scoped to a specific task or session, or does every invocation receive the same broad tool set regardless of the task?
 - **Cross-agent tool sharing:** Can one agent invoke another agent's tools? If so, through what authorization mechanism?
+- **Effective permission proof:** Is there a runtime policy decision trace showing the exact agent identity, user/session, tool, action, resource, input digest, policy version, allow/deny result, and reason? Declared tools or role names are insufficient without effective evaluation evidence.
+- **Indirect state-changing chains:** Can preview/read-only tool output be replayed into a later execute/write path, such as `payment.preview` output becoming `payment.release` input? If so, the chain must be evaluated as state-changing.
 
-**Detection methods:** Search for agent/tool definitions (`register_tool`, `add_tool`, `@tool`, `FunctionTool`), permission configs (`service_account`, `iam`, `role_arn`, wildcards in IAM policies), and tool scoping logic (`filter_tools`, `permitted_tools`, `enabled_tools`).
+**Detection methods:** Search for agent/tool definitions (`register_tool`, `add_tool`, `@tool`, `FunctionTool`), permission configs (`service_account`, `iam`, `role_arn`, wildcards in IAM policies), tool scoping logic (`filter_tools`, `permitted_tools`, `enabled_tools`), policy traces (`policy_decision`, `policy_version`, `authz`, `allowed`, `denied`), and preview-to-execute handoffs (`preview_result`, `dry_run_result`, `execute_input`, `release`, `commit`).
 
 **Permission model evaluation matrix:**
 
@@ -150,6 +153,8 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 | Per-task scoping | Tool set varies by task, not globally assigned | Medium -- static over-provisioning |
 | Time-bounded access | Credentials and tool access expire, requiring renewal | Medium -- persistent access risk |
 | Explicit deny | Actions not explicitly permitted are denied by default | High -- fail-open permission model |
+| Policy traceability | Runtime allow/deny logs prove effective access | Medium -- declared roles trusted without proof |
+| Indirect chain control | Preview/read-only outputs cannot drive execute/write paths without re-authorization | High -- read-only path becomes state-changing |
 
 **NIST AI RMF mapping:** GOVERN 1.2 (roles and responsibilities for AI actors), MAP 3.5 (impact assessment for AI system capabilities).
 
@@ -162,6 +167,8 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 | Agent has access to tools it never needs for its defined purpose | High |
 | No per-task or per-session tool scoping -- every invocation gets full tool set | High |
 | Tool registration allows runtime tool injection by the agent itself | High |
+| No runtime policy evaluation trace for effective tool access | High |
+| Preview-only or read-only tool output is reused as execute input without a fresh policy decision | High |
 | Agent credentials do not expire or rotate | Medium |
 | Tool permissions not documented or reviewed periodically | Medium |
 
@@ -217,6 +224,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 - **Gate placement:** Where in the agent workflow do human approval gates exist? Are they placed before every state-changing action, only before high-risk actions, or not at all?
 - **Gate bypass paths:** Can the agent take an alternative path that avoids the approval gate? Are there fallback modes that skip approval when the approval service is unavailable?
 - **Gate context sufficiency:** When a human is asked to approve an action, do they receive enough context to make a meaningful decision? Or do they see only a summary that hides critical details?
+- **Approval artifact binding:** Is each approval token bound to one action, actor, resource, input digest, policy version, approver, and expiry? Or can cached approval be replayed for a different action later?
 - **Cumulative action tracking:** If the agent can take many small actions, does the system track cumulative impact? Can an agent split a dangerous action into multiple individually benign sub-actions that bypass threshold-based gates?
 - **Approval fatigue management:** How many approval requests per session does a human reviewer face? Systems generating hundreds of low-context requests have effectively no human oversight.
 - **Fail-closed design:** If the approval service is unreachable, does the agent halt (fail-closed) or proceed without approval (fail-open)?
@@ -234,6 +242,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | Approval diversity | Critical actions require multiple approvers or multi-channel confirmation | Single click from one reviewer for all actions |
 | Anti-fatigue | Rate-limited approval requests; batch low-risk reviews separately | Hundreds of identical-looking requests per session |
 | Immutable gates | Approval logic in infrastructure, not modifiable by the agent | Approval thresholds stored where the agent can read or modify them |
+| Replay resistance | Approval token is single-use, action-bound, and expires quickly | Cached approval reused across unrelated actions |
 
 **What constitutes a finding:**
 
@@ -242,6 +251,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | No human approval gate before destructive or irreversible actions | Critical |
 | Approval gate fails open (agent proceeds on approval service timeout) | Critical |
 | Agent can modify approval thresholds or bypass conditions | Critical |
+| Approval tokens are reusable across different tools, resources, or input payloads | Critical |
 | Approval context insufficient for meaningful human decision | High |
 | No cumulative risk tracking -- agent can split dangerous actions into small steps | High |
 | Single approval mechanism for all risk levels (no tiered review) | Medium |
@@ -405,6 +415,8 @@ Evaluate the trust model between agents in multi-agent architectures, including 
 
 - **Inter-agent authentication:** When one agent sends a request or data to another agent, how is the sender's identity verified? Are messages signed? Or are inter-agent messages plain text over a shared channel with no authentication?
 - **Inter-agent authorization:** Even if sender identity is verified, is authorization enforced? Can any agent request any operation from any other agent, or are permitted interactions explicitly defined?
+- **Queue integrity:** If agents communicate through task queues, shared worklists, vector memory, or message brokers, is sender identity, message integrity, sequence number, and replay protection retained from enqueue through execution?
+- **Policy evaluation across boundaries:** When a planner asks a worker to act, is the worker authorized using its own effective permissions and the original user/task context, or does it blindly trust planner output?
 - **Shared state risks:** Do agents share memory, vector stores, or databases? If so, can one agent write data that another agent trusts and acts on without validation?
 - **Delegation depth:** Can an agent delegate tasks to sub-agents, which delegate further? Is there a maximum delegation depth? Can a delegated agent inherit or escalate the delegator's permissions?
 - **Trust hierarchy:** Is there an explicit trust hierarchy defining which agents are trusted for which operations? Or is trust implicit (all agents trust all agents)?
@@ -440,6 +452,8 @@ Glob: **/security_architecture*
 |---|---|---|
 | Inter-agent auth | Signed messages with verified identity | Plain text messages, no sender verification |
 | Authorization model | Explicit allowlist of permitted inter-agent requests | Any agent can request anything from any agent |
+| Queue integrity | Sender, receiver, task ID, sequence, signature, and expiry survive broker/queue transit | Queue item loses provenance before worker execution |
+| Policy trace | Worker logs policy inputs and allow/deny result for each delegated action | Worker executes planner output with no effective-permission proof |
 | Memory isolation | Per-agent memory; shared state mediated by trusted broker | All agents read/write shared memory directly |
 | Delegation control | Maximum depth; no permission escalation; explicit delegation policy | Unbounded delegation; delegated agents inherit full permissions |
 | Output validation | Receiving agent validates incoming data against schema | Receiving agent trusts all incoming data as instructions |
@@ -452,6 +466,8 @@ Glob: **/security_architecture*
 | No inter-agent authentication -- agents accept unsigned messages from any source | Critical |
 | Shared memory allows any agent to write data another agent trusts as instructions | Critical |
 | No authorization model for inter-agent requests -- any agent can request any operation | High |
+| Queue or task broker drops sender identity, message integrity, or replay protections | High |
+| Admin-scoped worker executes planner output without its own policy evaluation trace | Critical |
 | No delegation depth limit -- unbounded agent spawning | High |
 | Delegated agents inherit delegator's full permissions without scoping | High |
 | No explicit trust model document for multi-agent architecture | Medium |
@@ -491,6 +507,24 @@ Glob: **/security_architecture*
 | Agent | Purpose | Tools | Credentials | HITL Gates | Trust Level |
 |---|---|---|---|---|---|
 | [name] | [purpose] | [tool list] | [credential type] | [Yes/No, which actions] | [trust level] |
+
+## Effective Permission and Policy Trace
+
+| Agent | User/Session | Tool | Action | Resource | Input Digest | Policy Version | Decision | Reason | Trace Location |
+|---|---|---|---|---|---|---|---|---|---|
+| [agent] | [user/session] | [tool] | [read/write/execute] | [resource] | [hash] | [version] | [Allow/Deny] | [reason] | [log/link] |
+
+## Agent-to-Agent Trust Boundary Matrix
+
+| Sender | Receiver | Channel | Message Type | Integrity Evidence | AuthN/AuthZ | Queue/Replay Controls | Receiver Revalidation | State-Changing Chain |
+|---|---|---|---|---|---|---|---|---|
+| [agent] | [agent] | [queue/API/memory] | [task/result/context] | [signature/hash] | [policy] | [ttl/nonce/sequence] | [schema + policy check] | [Yes/No] |
+
+## Approval Artifact Review
+
+| Approval ID | Action | Resource | Input Digest | Approver | Policy Version | Expiry | Single-Use | Replay Check |
+|---|---|---|---|---|---|---|---|
+| [id] | [tool/action] | [resource] | [hash] | [identity] | [version] | [timestamp] | [Yes/No] | [result] |
 
 ## Architecture Diagram Annotations
 [Notes on trust boundaries, data flows, and security control placement annotating the existing architecture diagram, or a text-based representation if no diagram exists]
@@ -568,6 +602,19 @@ Glob: **/security_architecture*
 4. **Building audit trails that log actions but not context.** An audit log that records "Agent-A called write_file at 14:32:01" is useful for timeline reconstruction but insufficient for root cause analysis. Without logging what the agent was told (the prompt or task), what it reasoned (the chain of thought), and what it received from other agents or tools (the inputs), investigators cannot determine whether the action was legitimate, hallucinated, or injected. Log the full decision context for every consequential action.
 
 5. **Assuming rollback is someone else's problem.** Agent developers frequently rely on downstream systems (databases, deployment platforms, email providers) to handle rollback without verifying that rollback mechanisms actually exist and work. A database transaction can be rolled back, but only if the agent's actions are wrapped in a transaction. An email cannot be recalled. A deployed binary cannot be un-deployed if the deployment pipeline has no rollback. For every tool an agent can invoke, the architecture must document the rollback mechanism and test it.
+
+6. **Trusting declared roles instead of effective policy decisions.** A role named "read-only analyst" is not proof of low risk. Review the actual runtime allow/deny trace for the agent identity, task, tool, resource, policy version, and input digest, especially when tools are assigned dynamically.
+
+7. **Treating planner output as harmless data.** In multi-agent systems, a low-privilege planner can become dangerous if an admin-scoped worker treats planner output as an executable task. Queue provenance, sender identity, schema validation, policy re-evaluation, and replay controls must survive each handoff.
+
+8. **Reusing cached human approvals.** A broad or cached approval token can become a bypass when it is replayed against a different tool, resource, or input payload. Bind approvals to a single action and enforce expiry, single-use semantics, and audit logging.
+
+---
+
+## Changelog
+
+- **1.0.3** -- Added effective policy evaluation traces, agent-to-agent trust-boundary matrix, queue integrity evidence, approval artifact replay checks, and preview-to-execute indirect state-change review gates.
+- **1.0.2** -- Existing agent architecture review guidance with FASA lens, layered defenses, permission model, HITL, blast radius, audit, rollback, and multi-agent trust boundaries.
 
 ---
 
