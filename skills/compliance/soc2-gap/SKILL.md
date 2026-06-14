@@ -12,7 +12,7 @@ phase: [assess, operate]
 frameworks: [AICPA-TSC, NIST-CSF-2.0]
 difficulty: intermediate
 time_estimate: "60-120min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -43,6 +43,7 @@ Before beginning the gap analysis, ensure the following are available:
 - Logging and monitoring configurations
 - Incident response documentation
 - Vendor and third-party service inventory
+- Known control deficiencies, exceptions, audit findings, management responses, remediation tickets, retest records, and accepted-risk approvals
 
 ## Constraints
 
@@ -297,6 +298,65 @@ For detailed Trust Services Criteria evaluation questions, evidence requirements
 
 ---
 
+### Step 5: Control Deficiency Remediation Closure
+
+Before assigning a criterion a readiness score of 3 or 4, reconcile known deficiencies, exceptions, failed samples, internal audit findings, and remediation roadmap items against closure evidence. A policy, screenshot, or ticket proving that a control exists is not enough when there is an unresolved exception for the same Trust Services Criteria, system boundary, or observation period.
+
+#### 5.1 Deficiency Closure Matrix
+
+Build a closure matrix for every known deficiency or exception:
+
+| Field | Required Evidence |
+|---|---|
+| TSC ID | Affected Trust Services Criteria ID, such as CC6.1, CC7.4, or A1.2 |
+| Deficiency ID | Audit finding, exception, failed sample, ticket, or risk-register identifier |
+| Control owner | Person or team accountable for the control |
+| Root cause / failure mode | Why the control failed or why evidence was insufficient |
+| Management response | Documented response, action plan, or risk decision |
+| Remediation owner and due date | Owner, target date, and dependency tracking |
+| Remediation evidence | Ticket export, merged change, policy update, training record, configuration proof, or process artifact |
+| Retest procedure and result | Population/sample used, test steps, result, tester, and date |
+| Closure approver | Compliance lead, control owner, auditor liaison, or approved risk owner |
+| Status | Open / Remediated / Retested / Closed / Accepted Risk |
+| Score impact | Cap or adjustment applied to the affected criterion |
+
+```
+Control Deficiency Remediation Closure:
+- TSC ID:                 [CC7.4]
+- Deficiency ID:          [DEF-17]
+- Control Owner:          [Security]
+- Root Cause:             [Notification template omitted regulatory escalation path]
+- Management Response:    [Template update and tabletop retest planned]
+- Remediation Evidence:   [ticket/change/policy artifact or Missing]
+- Retest Evidence:        [sample, tester, date, result or Missing]
+- Closure Approver:       [name/title or N/A]
+- Status:                 [Open | Remediated | Retested | Closed | Accepted Risk]
+- Score Impact:           [Keep <=2 | Eligible for 3 | Eligible for 4]
+```
+
+#### 5.2 Scoring Impact Rules
+
+Apply these rules before finalizing criterion scores:
+
+- **Open high-impact deficiency:** cap the relevant criterion at 0-2 depending on severity and pervasiveness, even if other evidence exists.
+- **Remediated but not retested:** do not score as operating effectively; cap at 2 unless design effectiveness is the only stated objective.
+- **Partially remediated population:** only score the remediated population as improved; document remaining exceptions and observation-period impact.
+- **Accepted risk:** do not treat as closure unless it includes owner, rationale, expiration/review date, compensating controls, and auditor-facing impact notes.
+- **Post-period roadmap item:** do not increase current Type II readiness score until remediation and retest evidence exist within the relevant system boundary and observation period.
+- **Closed deficiency:** may support score 3 or 4 only when remediation evidence and retest evidence are linked to the same criterion, system boundary, and population.
+
+#### 5.3 Accepted-Risk Evidence
+
+For accepted-risk deficiencies, require:
+
+- approving owner with authority over the control and business risk;
+- rationale and residual-risk statement;
+- compensating controls or monitoring;
+- expiration or next review date;
+- note describing how the accepted risk affects SOC 2 readiness, examination exceptions, and customer-facing representations.
+
+---
+
 ### Step 6: Remediation Roadmap
 
 Prioritize remediation by audit readiness impact. Items that would result in examination exceptions or qualifications take highest priority.
@@ -365,9 +425,17 @@ When performing a SOC 2 gap analysis, produce the following deliverables:
 2. **Gap Assessment Matrix**: Completed scoring template from Step 4 with all in-scope criteria scored and annotated.
 3. **Category Summary**: Average maturity score per category with narrative assessment.
 4. **Critical Findings**: List of all criteria scored 0 or 1, with specific gap descriptions and remediation recommendations.
-5. **Evidence Checklist**: Customized evidence requirements based on in-scope criteria, marking items as Exists / Partial / Missing.
-6. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
-7. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
+5. **Control Deficiency Remediation Closure Matrix**: Known deficiencies and exceptions with management response, remediation evidence, retest evidence, closure approver, status, and score impact.
+6. **Evidence Checklist**: Customized evidence requirements based on in-scope criteria, marking items as Exists / Partial / Missing.
+7. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
+8. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
+
+### Control Deficiency Remediation Closure Matrix
+
+| TSC ID | Deficiency ID | Control Owner | Status | Management Response | Remediation Evidence | Retest Evidence | Closure Approver | Score Impact |
+|---|---|---|---|---|---|---|---|---|
+| [CC7.4] | [DEF-17] | [Security] | [Open] | [Template update planned] | [Missing] | [Missing] | [N/A] | [Keep score <= 2] |
+| [CC6.1] | [DEF-09] | [IT] | [Retested] | [Deprovisioning SLA workflow fixed] | [Ticket export] | [Retest sample passed] | [Compliance lead] | [Eligible for score 3] |
 
 ## Prompt Injection Safety Notice
 
@@ -393,3 +461,8 @@ This skill processes user-supplied content including compliance documentation, p
 - The gap analysis is based on information available in the codebase and documentation. It cannot assess controls that exist only in human processes without documentation.
 - Scoring is subjective and should be validated by the organization's security leadership and, ideally, a qualified auditor.
 - This analysis uses the 2017 AICPA Trust Services Criteria (with 2022 updates). Verify with your auditor that these criteria are current for your engagement.
+
+## Changelog
+
+- **1.0.1** -- Added control deficiency remediation closure evidence, retest requirements, accepted-risk handling, and score-impact guidance.
+- **1.0.0** -- Initial release. Full SOC 2 Type II readiness gap analysis workflow.
