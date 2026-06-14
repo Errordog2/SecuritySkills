@@ -14,7 +14,7 @@ phase: [design, build, review]
 frameworks: [OWASP-Agentic-AI, NIST-AI-RMF-1.0]
 difficulty: advanced
 time_estimate: "60-120min"
-version: "1.0.2"
+version: "1.0.3"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -60,6 +60,7 @@ Invoke this skill when any of the following conditions are true:
 - The blast radius of agent compromise or malfunction needs to be assessed.
 - An agent system requires audit trail design for compliance (SOC 2, ISO 27001, FedRAMP, HIPAA).
 - Rollback or recovery mechanisms for agent-initiated actions need evaluation.
+- A desktop or browser automation agent can view screens, perform OCR, read or write the clipboard, use accessibility APIs, drive a real browser profile, control extensions, record the screen, or interact with user accounts.
 
 Do NOT invoke this skill for:
 
@@ -86,6 +87,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Error handling and rollback code | Exception handlers, compensation logic, undo mechanisms | Reveals recovery capability |
 | Rate limiting and budget controls | API gateway configs, token budgets, cost limits | Determines resource exhaustion risk |
 | State persistence architecture | Database schemas, vector stores, session stores | Shows what state agents can read and write |
+| Desktop/browser automation permissions | Browser profile policy, extension inventory, accessibility/OCR configs, clipboard controls, screen recording settings, active-window allowlists | Reveals whether visual context, clipboard data, and real user sessions are overexposed to the agent |
 
 ---
 
@@ -111,6 +113,7 @@ The following threat patterns warrant explicit attention during architecture rev
 - **Sequential tool attack chains:** An attacker (or a manipulated agent) may chain individually benign tool calls into an attack sequence where the combined effect is harmful. Evaluate whether the system monitors tool call sequences, not just individual invocations.
 - **Confused-deputy behavior:** An agent with legitimate tool access is tricked -- typically via indirect prompt injection -- into performing unintended actions using its own authorized capabilities. The agent acts as a confused deputy: it has valid credentials and permissions, but an attacker directs its actions. This is distinct from privilege escalation; the agent never exceeds its permissions, yet causes harm within them.
 - **Cascading failure in long-horizon workflows:** Multi-step agent workflows (planning, research, execution sequences spanning minutes to hours) are vulnerable to error accumulation. An early-stage mistake or injection can compound through subsequent steps, producing increasingly harmful outcomes that are difficult to detect until the workflow completes.
+- **Desktop/browser context leakage:** Desktop and browser agents may capture unrelated windows, OCR private screen content, read sensitive clipboard values, or operate inside a user's real browser profile where cookies, extensions, payment sessions, and personal accounts expand the agent's effective authority.
 
 ### Red-Team Validation Tooling
 
@@ -137,8 +140,9 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 - **Dynamic vs. static tool sets:** Can the agent's tool set change at runtime? If an orchestrator dynamically assigns tools, what governs which tools are assigned?
 - **Per-session vs. permanent tool access:** Is tool access scoped to a specific task or session, or does every invocation receive the same broad tool set regardless of the task?
 - **Cross-agent tool sharing:** Can one agent invoke another agent's tools? If so, through what authorization mechanism?
+- **Desktop/browser automation permissions:** Can the agent capture full-screen screenshots, run OCR, read or write clipboard contents, invoke accessibility APIs, record the screen, access arbitrary windows, use the user's active browser profile, or control extensions? Are these capabilities scoped per app, per window, per origin, and per task?
 
-**Detection methods:** Search for agent/tool definitions (`register_tool`, `add_tool`, `@tool`, `FunctionTool`), permission configs (`service_account`, `iam`, `role_arn`, wildcards in IAM policies), and tool scoping logic (`filter_tools`, `permitted_tools`, `enabled_tools`).
+**Detection methods:** Search for agent/tool definitions (`register_tool`, `add_tool`, `@tool`, `FunctionTool`), permission configs (`service_account`, `iam`, `role_arn`, wildcards in IAM policies), tool scoping logic (`filter_tools`, `permitted_tools`, `enabled_tools`), and desktop/browser bridges (`screenshot`, `screen_capture`, `ocr`, `clipboard`, `accessibility`, `browser_profile`, `extension`, `active_window`, `record_screen`).
 
 **Permission model evaluation matrix:**
 
@@ -150,6 +154,7 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 | Per-task scoping | Tool set varies by task, not globally assigned | Medium -- static over-provisioning |
 | Time-bounded access | Credentials and tool access expire, requiring renewal | Medium -- persistent access risk |
 | Explicit deny | Actions not explicitly permitted are denied by default | High -- fail-open permission model |
+| Desktop/browser scope | Screen, OCR, clipboard, accessibility, profile, extension, and recording access are allowlisted by app/window/origin | High -- agent can observe or act through unrelated user context |
 
 **NIST AI RMF mapping:** GOVERN 1.2 (roles and responsibilities for AI actors), MAP 3.5 (impact assessment for AI system capabilities).
 
@@ -162,6 +167,9 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 | Agent has access to tools it never needs for its defined purpose | High |
 | No per-task or per-session tool scoping -- every invocation gets full tool set | High |
 | Tool registration allows runtime tool injection by the agent itself | High |
+| Agent can capture unrestricted full-screen or multi-monitor screenshots without window/app allowlists | High |
+| Agent can read the clipboard globally without task binding, provenance checks, or user-visible approval | High |
+| Agent operates inside a user's real browser profile with cookies, extensions, and payment sessions available by default | High |
 | Agent credentials do not expire or rotate | Medium |
 | Tool permissions not documented or reviewed periodically | Medium |
 
@@ -179,8 +187,9 @@ Evaluate whether the agent architecture is designed from the ground up around le
 - **Environment variable access:** Can the agent read all environment variables, including those containing secrets for other services?
 - **Resource limits:** Are CPU, memory, token budget, and execution time limits enforced at the infrastructure level?
 - **Capability escalation paths:** Can the agent request elevated permissions at runtime, modify its own configuration, or influence the orchestrator to grant it additional tools?
+- **Desktop/browser surface scope:** Are automation sessions isolated to dedicated browser profiles, approved origins, and specific app/window handles? Are clipboard read and write operations split into separate permissions with explicit controls?
 
-**Detection methods:** Search for network restrictions (`network_policy`, `egress`, `allowed_hosts`), file system restrictions (`chroot`, `sandbox`, `allowed_paths`), environment access (`os.environ`, `process.env`), resource limits (`max_tokens`, `token_budget`, `timeout`, `memory_limit`), and self-modification patterns (`self.tools`, `self.config`, `modify_config`).
+**Detection methods:** Search for network restrictions (`network_policy`, `egress`, `allowed_hosts`), file system restrictions (`chroot`, `sandbox`, `allowed_paths`), environment access (`os.environ`, `process.env`), resource limits (`max_tokens`, `token_budget`, `timeout`, `memory_limit`), self-modification patterns (`self.tools`, `self.config`, `modify_config`), and desktop/browser scoping controls (`window_allowlist`, `app_allowlist`, `origin_allowlist`, `dedicated_profile`, `clipboard_read`, `clipboard_write`, `focus_check`).
 
 **Least-privilege design checklist:**
 
@@ -193,6 +202,9 @@ Evaluate whether the agent architecture is designed from the ground up around le
 | Secrets | No direct access; tools broker secret access | Agent can read all env vars including secrets |
 | Compute | Hard limits on tokens, time, memory | No limits; agent runs until it decides to stop |
 | Self-modification | Immutable config at runtime | Agent can modify its own tools or prompts |
+| Desktop automation | Per-app/window allowlists with active focus checks before action | Agent clicks or types into whichever window is foreground |
+| Browser automation | Dedicated browser profile and origin allowlist | Agent runs in a user's real profile with ambient cookies and extensions |
+| Clipboard bridge | Separate read/write grants with task-scoped values and expiry | Agent can silently read secrets or overwrite user clipboard |
 
 **What constitutes a finding:**
 
@@ -201,6 +213,9 @@ Evaluate whether the agent architecture is designed from the ground up around le
 | Agent can make arbitrary outbound HTTP requests (exfiltration channel) | Critical |
 | Agent can read environment variables containing secrets for other services | Critical |
 | Agent has unrestricted file system access on the host | High |
+| Desktop automation lacks per-app/window scoping or pre-action focus verification | High |
+| Browser automation uses a real user profile without isolation or origin restrictions | High |
+| Clipboard read/write permissions are combined and unrestricted | High |
 | Agent can modify its own system prompt or tool list at runtime | High |
 | No token budget or execution time limit enforced | High |
 | Agent can query any database table regardless of task scope | Medium |
@@ -220,8 +235,10 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 - **Cumulative action tracking:** If the agent can take many small actions, does the system track cumulative impact? Can an agent split a dangerous action into multiple individually benign sub-actions that bypass threshold-based gates?
 - **Approval fatigue management:** How many approval requests per session does a human reviewer face? Systems generating hundreds of low-context requests have effectively no human oversight.
 - **Fail-closed design:** If the approval service is unreachable, does the agent halt (fail-closed) or proceed without approval (fail-open)?
+- **Pre-action focus verification:** Before typing, clicking, uploading, submitting, or sending, does the executor re-check the active app, window title, process, browser origin, and focused element against the approved target?
+- **Sensitive desktop actions:** Do external sends, uploads, account changes, payment, KYC, tax, banking forms, and credential-field interactions require explicit human approval even when the agent already has desktop or browser control?
 
-**Detection methods:** Search for approval gates (`approve`, `human_in_the_loop`, `hitl`, `require_approval`), bypass paths (`skip_approval`, `auto_approve`, `fail_open`), cumulative tracking (`cumulative`, `session_risk`, `action_count`), and action classification (`risk_level`, `destructive`, `irreversible`, `high_risk`).
+**Detection methods:** Search for approval gates (`approve`, `human_in_the_loop`, `hitl`, `require_approval`), bypass paths (`skip_approval`, `auto_approve`, `fail_open`), cumulative tracking (`cumulative`, `session_risk`, `action_count`), action classification (`risk_level`, `destructive`, `irreversible`, `high_risk`), and desktop/browser guardrails (`active_window`, `focused_element`, `url_origin`, `credential_field`, `payment_form`, `upload_confirm`, `send_confirm`).
 
 **HITL gate design principles:**
 
@@ -234,6 +251,8 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | Approval diversity | Critical actions require multiple approvers or multi-channel confirmation | Single click from one reviewer for all actions |
 | Anti-fatigue | Rate-limited approval requests; batch low-risk reviews separately | Hundreds of identical-looking requests per session |
 | Immutable gates | Approval logic in infrastructure, not modifiable by the agent | Approval thresholds stored where the agent can read or modify them |
+| Focus revalidation | Executor verifies app/window/origin/focused element immediately before action | Agent approval is checked once, then focus changes before execution |
+| High-risk desktop actions | External sends, uploads, account, payment, KYC, tax, banking, and credential-field actions require explicit approval | Agent treats sensitive desktop actions as ordinary clicks or typing |
 
 **What constitutes a finding:**
 
@@ -244,6 +263,8 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | Agent can modify approval thresholds or bypass conditions | Critical |
 | Approval context insufficient for meaningful human decision | High |
 | No cumulative risk tracking -- agent can split dangerous actions into small steps | High |
+| No focus re-check before desktop/browser actions that type, click, upload, submit, or send | High |
+| Agent can submit payment, KYC, tax, banking, account-change, upload, external-send, or credential-field actions without explicit human approval | High |
 | Single approval mechanism for all risk levels (no tiered review) | Medium |
 | No approval fatigue management (high volume of undifferentiated requests) | Medium |
 | Approval logic implemented in application code modifiable at runtime | Medium |
@@ -262,8 +283,9 @@ Evaluate the architectural controls that limit the damage when an agent is compr
 - **Action reversibility:** Are the actions the agent can take reversible? If the agent sends an email, posts to a public API, or deploys code, can those actions be undone?
 - **Kill switch:** Can an agent be immediately terminated by an operator? Is there a mechanism to halt all agents simultaneously in an emergency?
 - **Rate and scope limiters:** Even within its permitted tool set, are there limits on how much an agent can do in a given time window (e.g., maximum 10 database writes per minute, maximum 5 emails per session)?
+- **Visual and clipboard data minimization:** Are screenshots, OCR text, screen recordings, accessibility trees, and clipboard values redacted before model ingestion and before any remote logging? Are unrelated windows and multi-monitor capture blocked by default?
 
-**Detection methods:** Search for isolation (`container`, `sandbox`, `seccomp`, `gvisor`), network segmentation (`network_policy`, `security_group`, `169.254.169.254`), kill switches (`emergency`, `circuit_breaker`, `shutdown`), rate limiting (`rate_limit`, `throttle`, `max_per_session`), and reversibility (`undo`, `rollback`, `compensat`).
+**Detection methods:** Search for isolation (`container`, `sandbox`, `seccomp`, `gvisor`), network segmentation (`network_policy`, `security_group`, `169.254.169.254`), kill switches (`emergency`, `circuit_breaker`, `shutdown`), rate limiting (`rate_limit`, `throttle`, `max_per_session`), reversibility (`undo`, `rollback`, `compensat`), and screen/clipboard containment (`redact`, `mask`, `ocr_filter`, `capture_region`, `multi_monitor`, `clipboard_provenance`, `remote_logging`).
 
 **Blast radius assessment framework:**
 
@@ -275,6 +297,7 @@ Evaluate the architectural controls that limit the damage when an agent is compr
 | Persistent access | Can it create backdoors, new credentials, or modify configs? | Persistent attacker presence survives agent termination |
 | External impact | What irreversible external actions can it take? | Emails sent, APIs called, code deployed, money transferred |
 | Resource exhaustion | How much compute/cost can it consume? | Unbounded API spend, denial of service |
+| Visual context leakage | What screenshots, OCR text, accessibility trees, recordings, or clipboard contents can it ingest or log? | Passwords, payment pages, private chats, unrelated windows, or second monitors exposed |
 
 **What constitutes a finding:**
 
@@ -285,6 +308,8 @@ Evaluate the architectural controls that limit the damage when an agent is compr
 | Compromised agent can access cloud metadata endpoint (credential theft) | Critical |
 | No network segmentation -- agent can reach any internal service | High |
 | Agent can take irreversible external actions (email, deploy, payment) without containment | High |
+| Screenshot, OCR, accessibility, recording, or clipboard output is sent to a model or remote log before redaction | High |
+| Desktop capture includes unrelated windows or multi-monitor content by default | High |
 | No rate limiting on agent actions within permitted tool scope | High |
 | Agent isolation relies solely on application-level controls, not infrastructure-level | Medium |
 | No documented blast radius assessment for agent compromise scenarios | Medium |
@@ -304,8 +329,9 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 - **Log completeness:** Are there code paths where tool invocations occur but logging is skipped (e.g., in error handlers, retry logic, or fallback paths)?
 - **Log retention and access:** Are agent audit logs retained for the required compliance period? Are they accessible to security and compliance teams?
 - **Cross-agent correlation:** In multi-agent systems, can logs be correlated across agents to reconstruct the full action chain for a given workflow?
+- **Desktop/browser audit context:** For screen/clipboard automation, do logs include window title, process name, active URL origin, screenshot or clipboard access reason, redaction result, focused element class, and whether human approval was triggered?
 
-**Detection methods:** Search for logging implementations (`logger`, `audit`, `emit`), per-invocation fields (`tool_name`, `tool_input`, `correlation_id`, `trace_id`), log integrity (`immutable`, `append_only`, `tamper`), decision logging (`reasoning`, `chain_of_thought`, `rationale`), and SIEM integration (`splunk`, `datadog`, `cloudwatch`, `elasticsearch`).
+**Detection methods:** Search for logging implementations (`logger`, `audit`, `emit`), per-invocation fields (`tool_name`, `tool_input`, `correlation_id`, `trace_id`), log integrity (`immutable`, `append_only`, `tamper`), decision logging (`reasoning`, `chain_of_thought`, `rationale`), SIEM integration (`splunk`, `datadog`, `cloudwatch`, `elasticsearch`), and desktop/browser fields (`window_title`, `process_name`, `url_origin`, `screenshot_reason`, `clipboard_reason`, `redaction_result`, `approval_required`).
 
 **Audit trail completeness checklist:**
 
@@ -320,6 +346,11 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 | Prompt hash or summary | Context reconstruction | No record of what the agent was told to do |
 | Error details | Failure analysis | Errors caught and swallowed silently |
 | Approval decisions (if HITL) | Oversight verification | Approvals not logged or logged without the approver's identity |
+| Window title and process name | Desktop action attribution | Cannot tell which app received a click, keystroke, screenshot, or clipboard action |
+| Active browser URL origin | Browser-session attribution | Logs include a click but not the website origin affected |
+| Screenshot/OCR/clipboard access reason | Data-minimization review | Visual or clipboard reads appear without business justification |
+| Redaction result | Privacy and incident review | No evidence that sensitive screen or clipboard data was masked |
+| Focus and approval gate result | HITL enforcement review | Cannot tell whether focus changed or approval was required before execution |
 
 **NIST AI RMF mapping:** MANAGE 2.4 (mechanisms for tracking AI risks), MANAGE 4.1 (incident tracking and response), GOVERN 1.2 (roles and responsibilities documented through audit trails).
 
@@ -332,6 +363,7 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 | No correlation ID to link multi-step agent workflows | High |
 | Agent actions not attributable to specific agent identity (shared identity) | High |
 | No log pipeline to SIEM or centralized log management | High |
+| Desktop/browser actions omit window title, process, active URL origin, access reason, redaction result, or approval-gate outcome | High |
 | Decision reasoning not logged for compliance-sensitive actions | Medium |
 | Audit logs not retained for required compliance period | Medium |
 | Error paths skip audit logging | Medium |
@@ -351,6 +383,7 @@ Evaluate whether agent-initiated actions can be undone when something goes wrong
 - **State snapshots:** Does the system capture state snapshots before agent action sequences, enabling restore to a known-good state?
 - **Deployment rollback:** If the agent deploys code or infrastructure changes, is there a rollback mechanism (blue-green deployment, feature flags, version rollback)?
 - **Communication rollback:** If the agent sends external communications (emails, notifications, API calls), what is the recovery procedure? Are draft modes available for review before sending?
+- **Desktop/browser irreversible action guardrails:** If the agent is operating through a GUI, are external sends, uploads, account changes, payment, KYC, tax, banking forms, and credential-field interactions blocked by default or routed to explicit human approval with recovery instructions?
 
 **Detection methods using allowed tools:**
 
@@ -382,12 +415,14 @@ Grep: "draft|staging|preview|dry_run|dry.run|simulate|sandbox_mode" in **/*.{py,
 | Communications | Email, Slack, notification | Cannot recall; use draft/review mode | HITL gate before send; draft mode |
 | Financial transactions | Payment, transfer | Reversal transaction (if supported) | HITL gate; hold period; reversal procedure |
 | Infrastructure changes | Provision, modify, destroy | IaC state rollback, destroy and recreate | IaC-managed with state history |
+| Desktop/browser submissions | Send buttons, uploads, account changes, credential entry, KYC/tax/banking/payment forms | Usually cannot be reliably undone | Block by default or require explicit approval, focus verification, and documented recovery path |
 
 **What constitutes a finding:**
 
 | Condition | Severity |
 |---|---|
 | Agent can take irreversible external actions with no rollback and no HITL gate | Critical |
+| Agent can complete desktop/browser external sends, uploads, account changes, payment, KYC, tax, banking, or credential-field interactions without explicit approval | Critical |
 | No compensation logic for reversible actions (database writes, file changes) | High |
 | Multi-step workflows not wrapped in transaction boundaries | High |
 | No state snapshots before agent action sequences | High |
@@ -498,7 +533,7 @@ Glob: **/security_architecture*
 ## Findings
 
 ### Finding [N]: [Title]
-- **Review Area:** [Permission Model | Least Privilege | HITL Gates | Blast Radius | Audit Trail | Rollback | Multi-Agent Trust]
+- **Review Area:** [Permission Model | Least Privilege | Desktop/Browser Automation | HITL Gates | Blast Radius | Audit Trail | Rollback | Multi-Agent Trust]
 - **Severity:** [Critical | High | Medium | Low | Informational]
 - **OWASP Agentic AI Category:** [AG01-AG10 or N/A]
 - **NIST AI RMF Function:** [GOVERN | MAP | MEASURE | MANAGE] [subcategory]
@@ -515,6 +550,7 @@ Glob: **/security_architecture*
 |---|---|---|---|
 | Permission Model | [rating] | [one-line summary] | [priority] |
 | Least-Privilege Design | [rating] | [one-line summary] | [priority] |
+| Desktop/Browser Automation | [rating] | [one-line summary] | [priority] |
 | HITL Gate Placement | [rating] | [one-line summary] | [priority] |
 | Blast Radius Containment | [rating] | [one-line summary] | [priority] |
 | Audit Trail Completeness | [rating] | [one-line summary] | [priority] |
@@ -568,6 +604,8 @@ Glob: **/security_architecture*
 4. **Building audit trails that log actions but not context.** An audit log that records "Agent-A called write_file at 14:32:01" is useful for timeline reconstruction but insufficient for root cause analysis. Without logging what the agent was told (the prompt or task), what it reasoned (the chain of thought), and what it received from other agents or tools (the inputs), investigators cannot determine whether the action was legitimate, hallucinated, or injected. Log the full decision context for every consequential action.
 
 5. **Assuming rollback is someone else's problem.** Agent developers frequently rely on downstream systems (databases, deployment platforms, email providers) to handle rollback without verifying that rollback mechanisms actually exist and work. A database transaction can be rolled back, but only if the agent's actions are wrapped in a transaction. An email cannot be recalled. A deployed binary cannot be un-deployed if the deployment pipeline has no rollback. For every tool an agent can invoke, the architecture must document the rollback mechanism and test it.
+
+6. **Treating desktop automation like a normal API tool.** A GUI agent can inherit whatever is visible or focused on the user's machine: unrelated windows, second monitors, clipboard secrets, active browser cookies, payment sessions, and extensions. Reviewers should treat screenshots, OCR, accessibility trees, clipboard reads, and real browser profiles as privileged data and action channels that need explicit scope, redaction, audit, and approval controls.
 
 ---
 
