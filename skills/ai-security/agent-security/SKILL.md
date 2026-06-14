@@ -14,7 +14,7 @@ phase: [design, build, review]
 frameworks: [OWASP-Agentic-AI, NIST-AI-RMF-1.0]
 difficulty: advanced
 time_estimate: "60-120min"
-version: "1.0.2"
+version: "1.0.3"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -86,6 +86,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Error handling and rollback code | Exception handlers, compensation logic, undo mechanisms | Reveals recovery capability |
 | Rate limiting and budget controls | API gateway configs, token budgets, cost limits | Determines resource exhaustion risk |
 | State persistence architecture | Database schemas, vector stores, session stores | Shows what state agents can read and write |
+| Security-state persistence | Policy decision logs, approval stores, denial lists, workflow checkpoints | Shows whether denied actions, active constraints, risk scores, and approvals survive context rollover, retries, crash recovery, and subagent handoff |
 
 ---
 
@@ -125,6 +126,27 @@ For high-consequence agentic systems, apply defenses in the following order. Eac
 3. **Sandboxed execution** -- Run tool calls in isolated, resource-limited environments with minimal permissions.
 4. **Deterministic policy enforcement** -- For high-consequence actions (production deployments, financial transactions, data deletion), enforce hard-coded policy checks and HITL gates that cannot be overridden by model output, regardless of reasoning.
 
+### Persistent Security State and Sequence-Aware Tool Control
+
+For agents that can write files, call external APIs, deploy code, spend money, access secrets, or delegate to other tool-using agents, review security decisions as durable workflow state rather than prompt-only memory. Long-horizon workflows must preserve controls across context compaction, session resume, retries, crash recovery, and subagent handoff.
+
+| Gate | Evidence Required | Finding If Absent |
+|---|---|---|
+| Persistent security-state store | Deterministic storage for active constraints, denied actions, risk score, budget state, approval status, approval expiry, actor chain, and policy version | High -- agent can forget controls after rollover or resume |
+| Sequence-aware tool-chain evaluation | Policy evaluates ordered call chains such as read -> transform -> external send, not only single tool requests | High -- individually benign calls can combine into exfiltration or unsafe side effects |
+| Denial inheritance | Prior denials and equivalent-tool blocks propagate to retries, renamed tools, delegated subagents, and resumed sessions | High -- denied action can be reintroduced through another agent or alias |
+| Approval binding | Human approval binds exact action class, resource, parameters, environment, actor chain, expiry, and policy version | Critical -- stale or broad approval authorizes a materially different action |
+| Rollover/resume tests | Tests prove context-window rollover, worker crash, retry, and session resume preserve active constraints and audit continuity | Medium -- long-running workflows lose guardrails under normal recovery paths |
+
+**Tool-chain examples to review:**
+
+- Read customer export -> summarize -> send email or external API call.
+- Read repository secrets -> transform into logs -> upload artifact.
+- Generate deployment plan -> request staging approval -> environment or route changes to production.
+- Denied payment transfer -> retry through a subagent, renamed connector, or "manual browser" tool.
+
+Treat these as architecture findings only when the agent has side-effect tools, sensitive data access, delegated execution, or high-impact approvals. A read-only summarizer with no external send, write, or delegation path may document lightweight session logs instead of a heavyweight state machine.
+
 ### Step 1 -- Agent Permission Model Review
 
 Evaluate what each agent can do, under what conditions, and whether the permission model follows least-privilege principles.
@@ -137,6 +159,7 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 - **Dynamic vs. static tool sets:** Can the agent's tool set change at runtime? If an orchestrator dynamically assigns tools, what governs which tools are assigned?
 - **Per-session vs. permanent tool access:** Is tool access scoped to a specific task or session, or does every invocation receive the same broad tool set regardless of the task?
 - **Cross-agent tool sharing:** Can one agent invoke another agent's tools? If so, through what authorization mechanism?
+- **Stateful deny controls:** If a tool/action is denied, is the denial written to a durable policy state store and checked before semantically equivalent tool calls, retries, or delegated requests?
 
 **Detection methods:** Search for agent/tool definitions (`register_tool`, `add_tool`, `@tool`, `FunctionTool`), permission configs (`service_account`, `iam`, `role_arn`, wildcards in IAM policies), and tool scoping logic (`filter_tools`, `permitted_tools`, `enabled_tools`).
 
@@ -150,6 +173,7 @@ Evaluate what each agent can do, under what conditions, and whether the permissi
 | Per-task scoping | Tool set varies by task, not globally assigned | Medium -- static over-provisioning |
 | Time-bounded access | Credentials and tool access expire, requiring renewal | Medium -- persistent access risk |
 | Explicit deny | Actions not explicitly permitted are denied by default | High -- fail-open permission model |
+| Durable denials | Denied tools/actions persist across retries, resumes, and delegated agents | High -- prompt-only denial can be forgotten |
 
 **NIST AI RMF mapping:** GOVERN 1.2 (roles and responsibilities for AI actors), MAP 3.5 (impact assessment for AI system capabilities).
 
@@ -220,6 +244,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 - **Cumulative action tracking:** If the agent can take many small actions, does the system track cumulative impact? Can an agent split a dangerous action into multiple individually benign sub-actions that bypass threshold-based gates?
 - **Approval fatigue management:** How many approval requests per session does a human reviewer face? Systems generating hundreds of low-context requests have effectively no human oversight.
 - **Fail-closed design:** If the approval service is unreachable, does the agent halt (fail-closed) or proceed without approval (fail-open)?
+- **Approval scope persistence:** Does the approval store bind approval to exact action class, resource, parameters, environment, approver, actor chain, policy version, and expiry? Does a resumed workflow revalidate stale approvals?
 
 **Detection methods:** Search for approval gates (`approve`, `human_in_the_loop`, `hitl`, `require_approval`), bypass paths (`skip_approval`, `auto_approve`, `fail_open`), cumulative tracking (`cumulative`, `session_risk`, `action_count`), and action classification (`risk_level`, `destructive`, `irreversible`, `high_risk`).
 
@@ -234,6 +259,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | Approval diversity | Critical actions require multiple approvers or multi-channel confirmation | Single click from one reviewer for all actions |
 | Anti-fatigue | Rate-limited approval requests; batch low-risk reviews separately | Hundreds of identical-looking requests per session |
 | Immutable gates | Approval logic in infrastructure, not modifiable by the agent | Approval thresholds stored where the agent can read or modify them |
+| Scope binding | Approval is parameter- and resource-specific with expiry and actor chain | Broad approval reused for different resources, environments, or child agents |
 
 **What constitutes a finding:**
 
@@ -243,6 +269,7 @@ Evaluate the design, placement, and robustness of human approval gates in the ag
 | Approval gate fails open (agent proceeds on approval service timeout) | Critical |
 | Agent can modify approval thresholds or bypass conditions | Critical |
 | Approval context insufficient for meaningful human decision | High |
+| Approval not bound to exact scope, parameters, actor chain, and expiry | High |
 | No cumulative risk tracking -- agent can split dangerous actions into small steps | High |
 | Single approval mechanism for all risk levels (no tiered review) | Medium |
 | No approval fatigue management (high volume of undifferentiated requests) | Medium |
@@ -300,6 +327,7 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 - **Action logging:** Is every tool invocation logged with: agent identity, timestamp, tool name, full input parameters, output result, session/correlation ID, and the user or trigger that initiated the workflow?
 - **Decision logging:** Is the agent's reasoning captured? For compliance-sensitive decisions, logging only the action without the reasoning makes it impossible to audit why the agent acted as it did.
 - **Prompt/context logging:** Is the prompt (or a hash/summary of it) logged for correlation? Can investigators reconstruct what the agent "saw" when it made a decision?
+- **Policy decision input logging:** Are policy inputs logged before and after tool-chain evaluation, including active constraints, prior denials, approval scope, risk score, budget state, sequence position, and policy version?
 - **Log integrity:** Are logs tamper-evident? Can the agent or an attacker who compromises the agent modify or delete its own audit trail?
 - **Log completeness:** Are there code paths where tool invocations occur but logging is skipped (e.g., in error handlers, retry logic, or fallback paths)?
 - **Log retention and access:** Are agent audit logs retained for the required compliance period? Are they accessible to security and compliance teams?
@@ -318,6 +346,8 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 | Session/correlation ID | Workflow reconstruction | No correlation across multi-step agent workflows |
 | User/trigger identity | Authorization audit | Agent actions not linked to initiating user |
 | Prompt hash or summary | Context reconstruction | No record of what the agent was told to do |
+| Policy decision inputs | Prove why a tool-chain was allowed or denied | Audit records only model narration, not active constraints or policy state |
+| Prior denials and active constraints | Confirm state survived retry/resume/delegation | Denials are visible only in prompt history |
 | Error details | Failure analysis | Errors caught and swallowed silently |
 | Approval decisions (if HITL) | Oversight verification | Approvals not logged or logged without the approver's identity |
 
@@ -329,6 +359,7 @@ Evaluate whether the audit logging for agent actions is sufficient for incident 
 |---|---|
 | Tool invocations not logged or logged without full parameters | Critical |
 | Agent can modify or delete its own audit trail | Critical |
+| Policy decisions omit active constraints, prior denials, approval scope, and sequence context | High |
 | No correlation ID to link multi-step agent workflows | High |
 | Agent actions not attributable to specific agent identity (shared identity) | High |
 | No log pipeline to SIEM or centralized log management | High |
@@ -407,6 +438,7 @@ Evaluate the trust model between agents in multi-agent architectures, including 
 - **Inter-agent authorization:** Even if sender identity is verified, is authorization enforced? Can any agent request any operation from any other agent, or are permitted interactions explicitly defined?
 - **Shared state risks:** Do agents share memory, vector stores, or databases? If so, can one agent write data that another agent trusts and acts on without validation?
 - **Delegation depth:** Can an agent delegate tasks to sub-agents, which delegate further? Is there a maximum delegation depth? Can a delegated agent inherit or escalate the delegator's permissions?
+- **Constraint inheritance:** Do child agents inherit active constraints, prior denials, approval expiry, risk/budget state, and audit correlation IDs from the parent workflow?
 - **Trust hierarchy:** Is there an explicit trust hierarchy defining which agents are trusted for which operations? Or is trust implicit (all agents trust all agents)?
 - **Cross-agent injection:** Can a compromised or manipulated agent inject adversarial content into messages that another agent processes as instructions?
 
@@ -442,6 +474,7 @@ Glob: **/security_architecture*
 | Authorization model | Explicit allowlist of permitted inter-agent requests | Any agent can request anything from any agent |
 | Memory isolation | Per-agent memory; shared state mediated by trusted broker | All agents read/write shared memory directly |
 | Delegation control | Maximum depth; no permission escalation; explicit delegation policy | Unbounded delegation; delegated agents inherit full permissions |
+| Constraint inheritance | Child agents receive parent constraints, prior denials, approval limits, and correlation IDs | Subagents start fresh and can bypass parent workflow state |
 | Output validation | Receiving agent validates incoming data against schema | Receiving agent trusts all incoming data as instructions |
 | Trust documentation | Explicit trust model document defining boundaries | Implicit trust; no documentation |
 
@@ -454,6 +487,7 @@ Glob: **/security_architecture*
 | No authorization model for inter-agent requests -- any agent can request any operation | High |
 | No delegation depth limit -- unbounded agent spawning | High |
 | Delegated agents inherit delegator's full permissions without scoping | High |
+| Delegated agents do not inherit active denials, approval limits, and audit correlation IDs | High |
 | No explicit trust model document for multi-agent architecture | Medium |
 | Inter-agent messages not logged for forensic reconstruction | Medium |
 | No input validation on data received from other agents | High |
@@ -492,6 +526,22 @@ Glob: **/security_architecture*
 |---|---|---|---|---|---|
 | [name] | [purpose] | [tool list] | [credential type] | [Yes/No, which actions] | [trust level] |
 
+## Persistent Security State
+
+| State Item | Storage Location | Updated By | Checked Before | Survives Rollover/Resume | Evidence |
+|---|---|---|---|---|---|
+| Active constraints | [policy store/checkpoint] | [component] | [tool router/policy engine] | [Yes/No] | [test/log link] |
+| Prior denials | [deny ledger] | [policy engine] | [retry/subagent/tool alias] | [Yes/No] | [test/log link] |
+| Approval scope/expiry | [approval service] | [approver/gate] | [tool execution layer] | [Yes/No] | [approval record] |
+| Risk and budget state | [workflow state] | [orchestrator] | [planner/tool router] | [Yes/No] | [checkpoint/log] |
+
+## Sequence-Aware Tool-Chain Review
+
+| Sequence | Individual Calls Look Benign? | Combined Risk | Required Gate | Result |
+|---|---|---|---|---|
+| [read -> transform -> external send] | [Yes/No] | [data exfiltration / side effect] | [approval, redaction, deny, budget] | [allowed/blocked/escalated] |
+| [denied action -> retry/subagent/tool alias] | [Yes/No] | [denial bypass] | [durable denial inheritance] | [allowed/blocked/escalated] |
+
 ## Architecture Diagram Annotations
 [Notes on trust boundaries, data flows, and security control placement annotating the existing architecture diagram, or a text-based representation if no diagram exists]
 
@@ -499,6 +549,7 @@ Glob: **/security_architecture*
 
 ### Finding [N]: [Title]
 - **Review Area:** [Permission Model | Least Privilege | HITL Gates | Blast Radius | Audit Trail | Rollback | Multi-Agent Trust]
+- **State/Sequence Impact:** [Persistent security state, approval binding, denial inheritance, or tool-chain sequence affected]
 - **Severity:** [Critical | High | Medium | Low | Informational]
 - **OWASP Agentic AI Category:** [AG01-AG10 or N/A]
 - **NIST AI RMF Function:** [GOVERN | MAP | MEASURE | MANAGE] [subcategory]
@@ -520,6 +571,8 @@ Glob: **/security_architecture*
 | Audit Trail Completeness | [rating] | [one-line summary] | [priority] |
 | Rollback Capability | [rating] | [one-line summary] | [priority] |
 | Multi-Agent Trust Boundaries | [rating] | [one-line summary] | [priority] |
+| Persistent Security State | [rating] | [one-line summary] | [priority] |
+| Sequence-Aware Tool Control | [rating] | [one-line summary] | [priority] |
 
 ## Recommendations
 [Prioritized list of architectural improvements]
@@ -568,6 +621,15 @@ Glob: **/security_architecture*
 4. **Building audit trails that log actions but not context.** An audit log that records "Agent-A called write_file at 14:32:01" is useful for timeline reconstruction but insufficient for root cause analysis. Without logging what the agent was told (the prompt or task), what it reasoned (the chain of thought), and what it received from other agents or tools (the inputs), investigators cannot determine whether the action was legitimate, hallucinated, or injected. Log the full decision context for every consequential action.
 
 5. **Assuming rollback is someone else's problem.** Agent developers frequently rely on downstream systems (databases, deployment platforms, email providers) to handle rollback without verifying that rollback mechanisms actually exist and work. A database transaction can be rolled back, but only if the agent's actions are wrapped in a transaction. An email cannot be recalled. A deployed binary cannot be un-deployed if the deployment pipeline has no rollback. For every tool an agent can invoke, the architecture must document the rollback mechanism and test it.
+
+6. **Keeping security state only in the model context.** Long-running agents may lose prior denials, active constraints, risk scores, budget state, and approval limits when context is compacted, a worker crashes, a session resumes, or a task is delegated. Security-relevant state must live in deterministic workflow storage and be checked by the policy/tool execution layer. Prompt reminders are useful context, not enforcement.
+
+---
+
+## Version History
+
+- **v1.0.3** -- Added persistent security-state and sequence-aware tool-chain gates, durable denial inheritance, approval scope/expiry/actor-chain binding, context rollover/resume tests, policy decision input logging, and output sections for state and sequence review.
+- **v1.0.2** -- Expanded architecture review coverage for agent permission, least privilege, HITL, blast radius, audit trail, rollback, and multi-agent trust boundaries.
 
 ---
 
