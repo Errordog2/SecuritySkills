@@ -12,7 +12,7 @@ phase: [build]
 frameworks: [OWASP-ASVS-4.0.3, CWE-Top-25]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -84,12 +84,22 @@ Use Glob and Grep to locate SAST tool configurations, custom rules, and CI integ
 **/.github/workflows/*.yml
 **/.gitlab-ci.yml
 **/Jenkinsfile*
+
+# Generated / AI-assisted code governance
+**/generated/**
+**/*generated*
+**/openapi*.yaml
+**/openapi*.json
+**/*codegen*
+**/SAST-GENERATED-CODE.md
+**/GENERATED_CODE_PROVENANCE.*
 ```
 
 Categorize by:
 - **Tool:** Semgrep, CodeQL, SonarQube, Bandit, ESLint-security, etc.
 - **Rule source:** Default/managed rules, community rules, custom org rules.
 - **Integration point:** Pre-commit, PR check, scheduled scan, IDE plugin.
+- **Generated-code handling:** included, excluded with a manifest, or excluded without evidence.
 
 ---
 
@@ -118,6 +128,30 @@ For each CWE, verify:
 - Rule severity matches the CWE's risk (Top 10 CWEs should not be INFO level).
 
 **Finding classification:** CWE Top 10 weakness with zero SAST coverage for a language in use is **High**. CWE 11-25 with no coverage is **Medium**.
+
+---
+
+### Step 2.5: AI-Generated and Generated-Code Provenance Gate
+
+Generated or AI-assisted code is not automatically risky, and comments that say "generated" are not security evidence by themselves. The review target is the scanning and governance boundary: what is excluded, why it is excluded, and whether regenerated or hand-edited code still receives equivalent SAST coverage.
+
+For every generated-code directory, AI-assisted code area, codegen output, OpenAPI client, SDK, migration output, or SAST exclusion that references generated code, require provenance evidence:
+
+- **Source artifact:** source spec, prompt artifact, template, schema, model/tool, or upstream generator input.
+- **Generator identity:** generator name and version, model/tool name where applicable, template version, and reproducible command.
+- **Ownership and review:** review owner, code owner, regeneration owner, and whether generated output was hand-edited.
+- **SAST inclusion policy:** whether generated files are scanned, partially scanned, or excluded; if excluded, which compensating checks scan the source spec/templates.
+- **Change evidence:** diff of generated output, source artifact diff, regeneration timestamp, and review/approval ticket.
+- **Suppression expiry:** exclusion owner, reason, scope, and expiry for `.semgrepignore`, CodeQL `paths-ignore`, Sonar exclusions, or tool-specific generated-code ignores.
+
+**High-risk patterns to report:**
+
+- `generated/`, SDK, OpenAPI client, or AI-assisted directories are excluded while containing business logic, auth decisions, payment logic, deserialization, SQL construction, request routing, or security-sensitive helpers.
+- Generated output is hand-edited but still treated as disposable or excluded from review.
+- LLM-generated tests encode unsafe behavior as expected output and are used as false-positive evidence without independent review.
+- Source specs/templates are scanned, but post-generation transforms or hand edits can introduce sources, sinks, or sanitizer bypasses that never run through SAST.
+
+**False-positive guard:** Do not report a file solely because it is generated or AI-assisted. A generated path is usually acceptable when it has reproducible provenance, owner review, source/template scanning, generated-output scanning or justified scoped exclusion, and periodic regeneration checks.
 
 ---
 
@@ -229,6 +263,7 @@ rules:
 - [ ] `confidence` is documented (HIGH, MEDIUM, LOW).
 - [ ] `languages` is explicitly specified.
 - [ ] `pattern-not` or `pattern-not-inside` handles known safe patterns to reduce false positives.
+- [ ] Taint-mode rules include regression fixtures for each supported framework version and helper API shape.
 
 ---
 
@@ -306,6 +341,30 @@ select sink.getNode(), source, sink, "SQL injection from $@.", source.getNode(),
 - [ ] `@tags` include CWE and OWASP references.
 - [ ] Taint tracking uses appropriate source and sink definitions.
 - [ ] Query is tested against known-vulnerable and known-safe code samples.
+- [ ] Query fixtures cover framework upgrades, wrapper/helper APIs, generated clients, and autofix output that may change source/sink relationships.
+
+---
+
+### Step 4.5: Taint-Mode Drift and Autofix Regression Gate
+
+Custom taint rules for Semgrep, CodeQL, or other SAST engines drift when framework APIs change, helper wrappers are introduced, generated clients are regenerated, or autofix modifies data-flow structure. Treat taint-mode configuration as code that needs compatibility metadata and regression coverage.
+
+For each custom taint rule pack or query suite, verify:
+
+- **Framework matrix:** supported languages, frameworks, major versions, sanitizer APIs, source APIs, sink APIs, and wrapper/helper APIs are documented.
+- **Fixture corpus:** each source, sink, sanitizer, safe wrapper, vulnerable wrapper, generated client, and framework-version variant has expected-positive and expected-negative fixtures.
+- **Rule drift signal:** CI reports rule test results separately from product SAST results, so a broken taint rule fails loudly rather than silently reducing coverage.
+- **Autofix re-scan:** automated fixes, codemods, and LLM-generated patches rerun taint-mode checks after modification and fail if new source-to-sink paths appear.
+- **Metadata:** rule packs record framework version, rule version, source/sink taxonomy, precision, confidence, and last fixture update.
+
+**High-risk patterns to report:**
+
+- Taint rules were tuned for one framework version and have no fixtures for newer helper APIs or generated clients.
+- Autofix changes validation, encoding, sanitizer, routing, ORM, or request-wrapper code without rerunning taint-mode checks.
+- A rule test suite only asserts vulnerable examples and lacks safe examples, causing suppressions to become the primary false-positive control.
+- Generated or AI-assisted test fixtures assert unsafe behavior as accepted output without independent security-owner approval.
+
+**Remediation:** Add fixture-backed rule tests for every supported framework version, run those tests in CI on rule changes and framework upgrades, and require a post-autofix SAST job before merge.
 
 ---
 
@@ -475,6 +534,18 @@ jobs:
 | Scheduled full scan | Yes/No | <cron schedule> |
 | Results dashboard | Yes/No | <dashboard URL or tool> |
 
+### Generated / AI-Assisted Code Governance
+
+| Path | Source artifact | Generator/model version | Scanned? | Exclusion owner | Review evidence |
+|------|-----------------|-------------------------|----------|-----------------|-----------------|
+| generated/client | openapi.yaml | openapi-generator 7.6.0 | Yes | N/A | PR #123 |
+
+### Taint Rule Drift Controls
+
+| Rule pack | Framework versions | Fixture coverage | Autofix re-scan | Last drift review |
+|-----------|--------------------|------------------|-----------------|-------------------|
+| custom.web.taint | Django 4.2/5.0 | Pos/neg fixtures | Required | 2026-06-14 |
+
 ### Findings
 
 #### [F-001] <Finding Title>
@@ -536,6 +607,14 @@ jobs:
 
 5. **Ignoring SAST scan performance.** If SAST takes 30 minutes on a PR check, developers will find ways to bypass it. Target under 10 minutes for PR scans. Use diff-aware scanning for PRs and reserve full analysis for scheduled scans.
 
+6. **Blanket-excluding generated or AI-assisted code.** Generated code can still contain business logic, auth decisions, deserialization paths, or unsafe clients. Exclude only with provenance, owner review, source/template scanning, and scoped compensating controls.
+
+7. **Treating comments as provenance.** A file header saying "generated" or "AI-assisted" is not enough. Require source artifact, generator/model version, reproducible command, review owner, and scan inclusion/exclusion evidence.
+
+8. **Letting taint-mode rules drift.** Custom taint rules that were correct for one framework version can miss new source/sink helper APIs after upgrades. Require fixture matrices and drift reviews tied to framework versions.
+
+9. **Trusting autofix without re-analysis.** Autofix and codemod output can change data-flow relationships. Re-run taint-mode SAST after autofix and fail on new source/sink paths before merge.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -564,4 +643,5 @@ This skill processes SAST configuration files, custom rules, and code patterns t
 
 ## Changelog
 
+- **1.0.1** -- Added generated/AI-assisted code provenance gates, generated-code exclusion evidence, taint-mode drift controls, framework fixture matrices, and post-autofix SAST re-scan requirements.
 - **1.0.0** -- Initial release. Full coverage of SAST configuration review against OWASP ASVS 4.0.3 and CWE Top 25, with Semgrep and CodeQL patterns.
