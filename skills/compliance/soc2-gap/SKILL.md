@@ -12,7 +12,7 @@ phase: [assess, operate]
 frameworks: [AICPA-TSC, NIST-CSF-2.0]
 difficulty: intermediate
 time_estimate: "60-120min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -297,7 +297,32 @@ For detailed Trust Services Criteria evaluation questions, evidence requirements
 
 ---
 
-### Step 6: Remediation Roadmap
+### Step 6: Vendor SOC 2 Freshness and Bridge-Letter Gate
+
+Vendor SOC 2 evidence must align to the organization's Type II observation window and the exact service, region, and subservice used. A report outside the current period is not automatically invalid, but it needs bridge evidence and no material control changes.
+
+For every critical vendor or subprocessor, document:
+
+- **Report type and period:** SOC 2 Type I vs Type II, report start/end dates, opinion date, trust categories covered, and whether the customer observation window is fully covered.
+- **Bridge period:** bridge-letter start/end dates, signer, date signed, covered services, covered regions, and whether the bridge directly closes the gap to the current audit period.
+- **Service scope:** exact product, subservice, environment, data region, subprocessors, and whether the customer uses carved-out or inclusive subservice organizations.
+- **Material changes:** vendor rebrand, acquisition, cloud migration, new subprocessor, region move, control redesign, or incident after the report period.
+- **CUEC mapping:** complementary user entity controls from the vendor report mapped to the customer's implemented controls, owners, and evidence.
+- **Freshness threshold:** maximum allowed age for critical-vendor evidence, stale-evidence owner, and remediation decision when the gap cannot be bridged.
+
+**High-risk patterns to report:**
+
+- Vendor SOC 2 report period ends before the customer observation window and no signed bridge letter covers the gap.
+- Bridge letter exists but excludes the exact service, region, subservice, trust category, or subprocessor used by the customer.
+- Type I report is used as proof of operating effectiveness across a Type II observation period.
+- CUECs are copied into the evidence binder but not mapped to customer controls, owners, or test evidence.
+- Vendor report is current, but a rebrand, migration, acquisition, major incident, or control redesign occurred after issuance without updated assurance.
+
+**False-positive guard:** Do not mark vendor evidence stale solely because the SOC 2 report ended before the customer audit start. If a signed bridge letter covers the gap, the service/region/subservice matches the customer's use, no material control changes occurred, and CUECs are mapped to implemented controls, the evidence can be treated as current for vendor-risk review.
+
+---
+
+### Step 7: Remediation Roadmap
 
 Prioritize remediation by audit readiness impact. Items that would result in examination exceptions or qualifications take highest priority.
 
@@ -366,8 +391,9 @@ When performing a SOC 2 gap analysis, produce the following deliverables:
 3. **Category Summary**: Average maturity score per category with narrative assessment.
 4. **Critical Findings**: List of all criteria scored 0 or 1, with specific gap descriptions and remediation recommendations.
 5. **Evidence Checklist**: Customized evidence requirements based on in-scope criteria, marking items as Exists / Partial / Missing.
-6. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
-7. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
+6. **Vendor Evidence Freshness Summary**: Critical vendor SOC 2 period, bridge-letter coverage, service/region scope, CUEC owner, and stale-evidence status.
+7. **90-Day Remediation Roadmap**: Prioritized action items with owners, deadlines, and dependencies.
+8. **Overall Readiness Assessment**: Go/no-go recommendation for engaging a SOC 2 auditor.
 
 ## Prompt Injection Safety Notice
 
@@ -386,6 +412,11 @@ This skill processes user-supplied content including compliance documentation, p
 - **NIST CSF 2.0 Mapping**: CC1-CC2 maps to Govern (GV), CC3 to Identify (ID), CC5-CC6 to Protect (PR), CC7 to Detect (DE) and Respond (RS), CC7.5 to Recover (RC).
 - **ISO 27001:2022**: CC6 maps to Annex A.8 (Technology Controls), CC8 maps to Annex A.8.32 (Change Management), CC9.2 maps to Annex A.5.19-5.22 (Supplier Relationships).
 - **CIS Controls v8**: CC6.1 maps to CIS Control 6 (Access Control Management), CC6.8 maps to CIS Control 10 (Malware Defenses), CC7.1 maps to CIS Control 7 (Continuous Vulnerability Management).
+
+## Changelog
+
+- **1.0.1** -- Added vendor SOC 2 report period, bridge-letter freshness, service/region/subservice scope, material-change, CUEC mapping, and stale-evidence gates.
+- **1.0.0** -- Initial release. SOC 2 Type II readiness gap analysis across Common Criteria, selected additional criteria, evidence requirements, and 90-day remediation planning.
 
 ## Limitations
 

@@ -327,17 +327,30 @@ This file contains the detailed Trust Services Criteria evaluation questions, ev
   - Is there a vendor management program?
   - Are vendors assessed for security risk before onboarding?
   - Are vendor SOC 2 reports or equivalent assurance reports collected and reviewed?
+  - Does each critical vendor report period align to the customer SOC 2 observation window?
+  - If the report period is stale, is there a signed bridge letter covering the gap with no material control changes?
+  - Does the report and bridge letter cover the exact product, subservice, region, and trust category used by the customer?
+  - Are complementary user entity controls (CUECs) mapped to customer-owned controls and evidence?
 - Evidence to look for:
   - Vendor management policy
   - Vendor risk assessment questionnaires (completed)
   - Vendor SOC 2 report review records
   - Vendor inventory with risk classifications
   - Contract provisions for security requirements (data processing agreements, BAAs)
+  - SOC 2 Type I/Type II report dates, opinion date, trust categories, service scope, carve-out/inclusive subservice organization treatment
+  - Bridge letters with coverage dates, signer, service/region/subservice scope, and material-change statement
+  - CUEC mapping worksheet with customer control owner, implemented control, evidence reference, and review sign-off
+  - Freshness threshold policy for critical vendors and stale-evidence exception/remediation records
 - Common gaps:
   - No formal vendor management program
   - Vendor SOC 2 reports are not collected or reviewed
   - No vendor risk assessment performed prior to onboarding
   - Contracts lack security and data protection provisions
+  - Vendor SOC 2 report period ends before the customer observation window and no bridge letter covers the gap
+  - Bridge letter excludes the product, subservice, region, trust category, or subprocessor used by the customer
+  - Type I report is used as evidence of operating effectiveness for a Type II audit period
+  - CUECs are listed but not mapped to actual customer controls or owners
+  - Vendor rebrand, migration, acquisition, major incident, or control redesign occurred after report issuance without updated assurance
 
 ---
 
