@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [CIS-Controls-v8, NIST-SP-800-53-AC-6]
 difficulty: intermediate
 time_estimate: "45-90min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -200,6 +200,10 @@ PAM-JIT-07: JIT requests not logged with justification for audit trail (AC-6(9))
 PAM-JIT-08: No notification when JIT access is activated (security team unaware)
 PAM-JIT-09: Ephemeral credential patterns not used where available (static secrets in pipelines)
 PAM-JIT-10: No escalation path when JIT approver is unavailable
+PAM-JIT-11: Issued privileged sessions outlive the approved JIT window
+PAM-JIT-12: Emergency revocation blocks new grants but does not terminate active sessions
+PAM-JIT-13: Long-running privileged sessions lack incident ID, owner, expiry, and post-incident review
+PAM-JIT-14: Session recording continues after approval expiry without proving the session is still authorized
 ```
 
 **Platform-specific JIT mechanisms:**
@@ -211,6 +215,31 @@ PAM-JIT-10: No escalation path when JIT approver is unavailable
 | **GCP** | Privileged Access Manager (PAM), IAM Conditions with time-bound bindings | Time-bound IAM bindings, approval workflows, audit logging |
 | **CyberArk** | Dual control, exclusive access, one-time passwords | Workflow approval, check-out/check-in, automatic rotation after use |
 | **HashiCorp Vault** | Dynamic secrets, leased credentials | TTL-based leases, automatic revocation, policy-bound issuance |
+
+#### JIT Session Residue and Expiry Testing
+
+Do not stop at the PAM or IdP access-request record. Prove that privileged runtime sessions end, fail re-authentication, or become unusable when the approved window expires.
+
+For each privileged access channel, compare the approved JIT window to the effective session lifetime:
+
+| Channel | Residue evidence to collect | Pass condition |
+|---|---|---|
+| Cloud role / STS | Role `MaxSessionDuration`, requested STS duration, console/API token TTL, revocation behavior | Token lifetime is less than or equal to the approved window, or active sessions are killed/downgraded on expiry |
+| SSH certificate | Certificate valid-after/valid-before, forced command, principals, active SSH session behavior after expiry | New sessions fail after expiry and existing sessions are bounded or explicitly terminated |
+| Database privileged session | Session idle/absolute timeout, role downgrade/kill behavior, audit event | Privileged DB session cannot continue beyond approved window without fresh authorization |
+| Kubernetes admin / `kubectl exec` / debug | Token TTL, exec/debug session behavior after role removal, audit log | Active exec/debug paths terminate or are alerted and bounded after JIT expiry |
+| Admin web console | Idle timeout, absolute timeout, refresh-token lifetime, re-auth requirements | Console access requires fresh approval after the JIT window |
+| Break-glass credential | Emergency account session TTL, rotation/revocation behavior, alerting | Break-glass use is time-bounded, rotated after use, and included in residue testing |
+
+Minimum evidence:
+
+- Approval start/end timestamp, requester, approver, ticket or incident ID, and requested scope.
+- Token/session issue time, expiry time, maximum duration, refresh behavior, and platform source.
+- Test result from one expired approval path: approve access, use it, allow it to expire or revoke it, then prove continued privileged action fails or the session is terminated.
+- Alert or report when a privileged session outlives the approval window.
+- Exception owner, expiry, and post-incident review for legitimate long-running production incidents.
+
+Classify silent session residue as High. Escalate to Critical when an expired session retains production administrator, domain administrator, cloud owner, database superuser, or Kubernetes cluster-admin capability without compensating termination, detection, or short TTL controls.
 
 **JIT Maturity Levels:**
 
@@ -352,6 +381,8 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 | **Medium** | PAM governance deficiency with medium-term risk | Partial vault onboarding; JIT duration excessive; recording gaps on some systems |
 | **Low** | PAM maturity improvement opportunity | Session recordings not indexed; break-glass test cadence > quarterly; vault policy refinement |
 
+Session recordings and audit trails reduce investigation risk but do not by themselves prove authorization. If a privileged session continues after JIT expiry, classify by the residual capability even when recording remains active.
+
 ---
 
 ## Output Format
@@ -391,6 +422,11 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 | JIT Access | [Not Present/Basic/Mature/Advanced] | [Target] |
 | Break-Glass | [Not Present/Basic/Mature/Advanced] | [Target] |
 | Analytics | [Not Present/Basic/Mature/Advanced] | [Target] |
+
+### JIT Session Residue Evidence
+| Channel | Approved Window | Token/Session TTL | Expired-Path Test | Residual Capability | Alert/Termination Evidence | Status |
+|---|---|---|---|---|---|---|
+| [AWS STS / SSH cert / DB / kubectl / console / break-glass] | [start-end] | [duration] | [pass/fail/not tested] | [none/read/admin/root] | [event/session kill/alert] | [Pass/Fail/Partial] |
 
 ### Findings by Severity
 - Critical: [count]
@@ -458,6 +494,8 @@ PAM-VAULT-12: No secrets scanning in code repositories to detect credential leak
 7. **Ignoring service account privilege** — PAM programs often focus on human admin accounts and neglect service accounts with equally powerful permissions.
 8. **No PAM HA/DR** — if the PAM tool is a single point of failure, its outage creates either a lockout or a break-glass event. Architect for resilience.
 
+9. **Assuming approval expiry kills sessions.** Many platforms revoke future grants but leave cloud STS credentials, SSH sessions, database connections, `kubectl exec`, or admin-console tokens alive. Always test one expired path end to end.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -503,3 +541,4 @@ that may contain adversarial content.
 | Version | Date | Changes |
 |---|---|---|
 | 1.0.0 | 2025-03-06 | Initial release |
+| 1.0.1 | 2026-06-14 | Added JIT session residue checks, expired-path testing, residual capability severity guidance, and output evidence for cloud STS, SSH certificates, database sessions, Kubernetes/admin console sessions, and break-glass credentials |
