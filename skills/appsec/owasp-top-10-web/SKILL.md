@@ -12,7 +12,7 @@ phase: [build, review]
 frameworks: [OWASP-Top-10-2021]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -20,7 +20,7 @@ injection-hardened: true
 argument-hint: "[target-file-or-directory]"
 ---
 
-# OWASP Top 10:2021 — Web Application Security Review
+# OWASP Top 10:2021 鈥?Web Application Security Review
 
 ## When to Use
 
@@ -34,7 +34,7 @@ Invoke this skill when:
 - Evaluating pull requests that touch authentication, authorization, input handling, cryptography, or external integrations.
 - Assessing a new web project's architecture for secure design principles before implementation begins.
 
-Do **not** use this skill for mobile-only, IoT firmware, or non-web API reviews — use a domain-specific skill instead.
+Do **not** use this skill for mobile-only, IoT firmware, or non-web API reviews 鈥?use a domain-specific skill instead.
 
 ## Context
 
@@ -44,23 +44,23 @@ This skill operationalizes all ten categories into a repeatable, structured revi
 
 ## Process
 
-### Step 1 — Scope and Inventory
+### Step 1 鈥?Scope and Inventory
 
 1. Use `Glob` to enumerate the project structure: source files, configuration files, dependency manifests, and infrastructure-as-code templates.
 2. Identify the technology stack: language, framework, template engine, ORM, authentication library, and deployment target.
 3. Catalog entry points: routes, controllers, API endpoints, middleware chains, and static asset serving.
 4. Note dependency manifests (`package.json`, `requirements.txt`, `pom.xml`, `Gemfile.lock`, `go.sum`, etc.) for component analysis.
 
-### Step 2 — Category-by-Category Analysis
+### Step 2 鈥?Category-by-Category Analysis
 
 Evaluate the codebase against each of the ten categories below. For every category, search for the listed detection patterns using `Grep` and `Read`, then record findings.
 
-**Precision Requirements — Reducing False Positives:**
+**Precision Requirements 鈥?Reducing False Positives:**
 
 Before including any finding in the report, apply the following verification gate:
 
 1. **Confirmed code path required.** Only flag a vulnerability when you can identify the specific file path, line number, and the vulnerable code pattern. Do not report speculative or theoretical risks where no concrete vulnerable code exists.
-2. **Verify exploitability.** For each potential finding, confirm that the vulnerable pattern is actually reachable and exploitable — not dead code, commented-out code, test fixtures, or intentionally disabled features with compensating controls elsewhere.
+2. **Verify exploitability.** For each potential finding, confirm that the vulnerable pattern is actually reachable and exploitable 鈥?not dead code, commented-out code, test fixtures, or intentionally disabled features with compensating controls elsewhere.
 3. **Distinguish "potential risk" from "confirmed vulnerability."** A grep match on a detection pattern is not a finding by itself. Read the surrounding code context (at least 10-20 lines) to confirm the pattern represents an actual vulnerability. For example:
    - A `Math.random()` call used for UI animation is NOT a cryptographic failure.
    - An `innerHTML` assignment with a static string literal is NOT an XSS vulnerability.
@@ -71,9 +71,9 @@ Before including any finding in the report, apply the following verification gat
 
 ---
 
-### A01:2021 — Broken Access Control
+### A01:2021 鈥?Broken Access Control
 
-**Risk:** Users act outside their intended permissions — accessing other users' data, elevating privileges, or bypassing access restrictions.
+**Risk:** Users act outside their intended permissions 鈥?accessing other users' data, elevating privileges, or bypassing access restrictions.
 
 **What to Look For:**
 
@@ -81,10 +81,11 @@ Before including any finding in the report, apply the following verification gat
 - Direct object references (IDOR) where user-supplied IDs are used to fetch records without ownership validation.
 - Endpoints that rely solely on client-side enforcement (hidden UI elements) rather than server-side checks.
 - CORS misconfigurations that permit arbitrary origins or reflect the `Origin` header without validation.
+- Cross-window messaging that uses wildcard `postMessage` target origins or trusts message payloads without schema validation.
 - Missing HTTP method restrictions (e.g., a route that accepts PUT/DELETE but only intended for GET).
 - JWT or session tokens that contain role claims without server-side verification against a trusted source.
 - Path traversal in file-serving endpoints.
-- Missing `deny-by-default` policies — routes are open unless explicitly restricted rather than closed unless explicitly opened.
+- Missing `deny-by-default` policies 鈥?routes are open unless explicitly restricted rather than closed unless explicitly opened.
 
 **CWE Mappings:**
 
@@ -103,12 +104,14 @@ Before including any finding in the report, apply the following verification gat
 **Detection Patterns (Grep):**
 
 ```
-# IDOR — direct use of user-supplied ID in DB query without ownership check
+# IDOR 鈥?direct use of user-supplied ID in DB query without ownership check
 params\.id|req\.params|request\.args\.get.*id
 # Missing CSRF protection
 csrf.*disable|csrf.*false|@csrf_exempt
 # Permissive CORS
 Access-Control-Allow-Origin.*\*|cors\(\{.*origin.*true
+# Unsafe browser messaging
+postMessage\(.*["']\*["']|addEventListener\(["']message|onmessage\s*=
 # Path traversal indicators
 \.\.\/|\.\.\\|path\.join.*req\.|sendFile.*req\.
 ```
@@ -116,26 +119,27 @@ Access-Control-Allow-Origin.*\*|cors\(\{.*origin.*true
 **Mitigations:**
 
 - Enforce authorization server-side on every request using middleware or decorators; adopt deny-by-default.
-- Validate resource ownership — confirm the authenticated user owns or has explicit permission to the requested resource.
+- Validate resource ownership 鈥?confirm the authenticated user owns or has explicit permission to the requested resource.
 - Use indirect references or opaque tokens instead of sequential database IDs.
 - Enable CSRF protection framework-wide; use `SameSite` cookie attributes.
 - Restrict CORS to an explicit allowlist of origins; never reflect arbitrary `Origin` values.
+- For `postMessage`, use exact `targetOrigin` values, validate `event.origin`, parse message payloads against a schema, and allowlist permitted actions before acting on `event.data`.
 - Constrain file paths with canonicalization and chroot/jail patterns; reject `..` sequences.
 
 ---
 
-### A02:2021 — Cryptographic Failures
+### A02:2021 鈥?Cryptographic Failures
 
-**Risk:** Sensitive data is exposed due to weak, missing, or misused cryptography — in transit, at rest, or during processing.
+**Risk:** Sensitive data is exposed due to weak, missing, or misused cryptography 鈥?in transit, at rest, or during processing.
 
 **What to Look For:**
 
 - Plaintext storage of passwords, tokens, API keys, or PII.
 - Use of deprecated algorithms: MD5, SHA-1 (for integrity of sensitive data), DES, 3DES, RC4, ECB mode.
 - Hard-coded encryption keys or secrets in source code.
-- Missing TLS enforcement — HTTP endpoints serving sensitive data, absent HSTS headers.
+- Missing TLS enforcement 鈥?HTTP endpoints serving sensitive data, absent HSTS headers.
 - Weak key derivation functions (e.g., raw SHA-256 for password hashing instead of bcrypt/scrypt/Argon2).
-- Insufficient randomness — use of `Math.random()`, `random.random()`, or similar non-CSPRNG functions for security-sensitive values.
+- Insufficient randomness 鈥?use of `Math.random()`, `random.random()`, or similar non-CSPRNG functions for security-sensitive values.
 - Secrets committed to version control (`.env` files, config files with credentials).
 
 **CWE Mappings:**
@@ -170,16 +174,16 @@ http:\/\/.*api|http:\/\/.*login|secure\s*:\s*false
 
 **Mitigations:**
 
-- Hash passwords exclusively with Argon2id, bcrypt (cost >= 10), or scrypt — never raw hash functions.
+- Hash passwords exclusively with Argon2id, bcrypt (cost >= 10), or scrypt 鈥?never raw hash functions.
 - Use AES-256-GCM or ChaCha20-Poly1305 for symmetric encryption; RSA-OAEP or ECDH for asymmetric.
-- Store secrets in a vault (HashiCorp Vault, AWS Secrets Manager, Azure Key Vault) — never in source code or environment files committed to VCS.
+- Store secrets in a vault (HashiCorp Vault, AWS Secrets Manager, Azure Key Vault) 鈥?never in source code or environment files committed to VCS.
 - Enforce TLS 1.2+ for all connections; set `Strict-Transport-Security` with `max-age >= 31536000; includeSubDomains`.
 - Use `crypto.getRandomValues()` (JS), `secrets` module (Python), or `SecureRandom` (Java/Ruby) for all security-sensitive random values.
 - Classify data by sensitivity and apply encryption controls proportionally.
 
 ---
 
-### A03:2021 — Injection
+### A03:2021 鈥?Injection
 
 **Risk:** Untrusted data is sent to an interpreter as part of a command or query, allowing attackers to execute unintended commands or access unauthorized data.
 
@@ -190,9 +194,9 @@ http:\/\/.*api|http:\/\/.*login|secure\s*:\s*false
 - OS command execution with user-controlled arguments (`exec`, `system`, `child_process.exec`, `os.system`, `subprocess.call` with `shell=True`).
 - LDAP queries built from user input without escaping.
 - XPath/XML queries constructed with concatenation.
-- Template injection — user input rendered directly into server-side templates (Jinja2, Thymeleaf, ERB, Twig).
+- Template injection 鈥?user input rendered directly into server-side templates (Jinja2, Thymeleaf, ERB, Twig).
 - NoSQL injection via query operator injection (`$gt`, `$ne`, `$regex` in MongoDB).
-- Header injection — user input placed into HTTP response headers without sanitization.
+- Header injection 鈥?user input placed into HTTP response headers without sanitization.
 
 **CWE Mappings:**
 
@@ -228,7 +232,7 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 
 **Mitigations:**
 
-- Use parameterized queries (prepared statements) for all SQL — no exceptions.
+- Use parameterized queries (prepared statements) for all SQL 鈥?no exceptions.
 - Use ORM methods properly; avoid raw query escape hatches unless inputs are strictly validated and parameterized.
 - For OS commands, use array-based APIs (e.g., `subprocess.run([...])` without `shell=True`); validate and allowlist expected argument values.
 - Apply context-aware output encoding for XSS: HTML-encode for HTML body, attribute-encode for attributes, JS-encode for script contexts. Use frameworks' built-in auto-escaping.
@@ -237,9 +241,9 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 
 ---
 
-### A04:2021 — Insecure Design
+### A04:2021 鈥?Insecure Design
 
-**Risk:** The application architecture lacks security controls by design — missing threat modeling, insecure business logic, absence of defense-in-depth.
+**Risk:** The application architecture lacks security controls by design 鈥?missing threat modeling, insecure business logic, absence of defense-in-depth.
 
 **What to Look For:**
 
@@ -248,7 +252,7 @@ setHeader\(.*req\.|res\.set\(.*req\.|response\.addHeader.*request\.getParameter
 - No account lockout or progressive delays after repeated failed authentication attempts.
 - Password reset flows that leak whether an account exists (different responses for valid vs. invalid emails).
 - Multi-step workflows that can be completed out of order or with steps skipped.
-- Missing trust boundaries — internal services accessible without authentication from external networks.
+- Missing trust boundaries 鈥?internal services accessible without authentication from external networks.
 - Absence of security requirements or threat model documentation.
 
 **CWE Mappings:**
@@ -283,7 +287,7 @@ failedAttempts|failed_attempts|lockout|max_attempts
 
 - Establish threat modeling early in the design phase (STRIDE, PASTA, or attack trees).
 - Implement rate limiting and account lockout on all authentication and sensitive endpoints.
-- Return generic error messages for authentication failures — never reveal whether a username or email exists.
+- Return generic error messages for authentication failures 鈥?never reveal whether a username or email exists.
 - Enforce all business rules server-side; treat the client as untrusted.
 - Define and enforce trust boundaries between components and network zones.
 - Write abuse cases and negative test cases alongside functional requirements.
@@ -291,7 +295,7 @@ failedAttempts|failed_attempts|lockout|max_attempts
 
 ---
 
-### A05:2021 — Security Misconfiguration
+### A05:2021 鈥?Security Misconfiguration
 
 **Risk:** The application or its infrastructure is insecure due to missing hardening, default settings, open cloud storage, verbose error messages, or unnecessary features enabled.
 
@@ -343,13 +347,13 @@ stack.*trace|stackTrace|detailed.*error|showErrors\s*:\s*true
 - Remove all default credentials, sample applications, and unused features before deployment.
 - Set `DEBUG=False` / `NODE_ENV=production` in all production configurations.
 - Disable XML external entity processing in all XML parsers by default.
-- Deploy security headers via middleware or reverse proxy — audit with tools like securityheaders.com.
+- Deploy security headers via middleware or reverse proxy 鈥?audit with tools like securityheaders.com.
 - Configure custom error pages that reveal no internal details; log full errors server-side only.
 - Run periodic configuration audits (CIS Benchmarks, cloud provider security tools).
 
 ---
 
-### A06:2021 — Vulnerable and Outdated Components
+### A06:2021 鈥?Vulnerable and Outdated Components
 
 **Risk:** The application uses libraries, frameworks, or other software components with known vulnerabilities, or components that are no longer maintained.
 
@@ -367,7 +371,7 @@ stack.*trace|stackTrace|detailed.*error|showErrors\s*:\s*true
 | CWE | Name |
 |-----|------|
 | CWE-829 | Inclusion of Functionality from Untrusted Control Sphere |
-| CWE-1035 | OWASP Top Ten 2017 Category A9 — Using Components with Known Vulnerabilities |
+| CWE-1035 | OWASP Top Ten 2017 Category A9 鈥?Using Components with Known Vulnerabilities |
 | CWE-1104 | Use of Unmaintained Third-Party Components |
 
 **Detection Patterns (Grep):**
@@ -392,7 +396,7 @@ angular\.js|jquery\s*["\'].*1\.|lodash.*3\.|moment\(\)|request\(  # (npm 'reques
 
 ---
 
-### A07:2021 — Identification and Authentication Failures
+### A07:2021 鈥?Identification and Authentication Failures
 
 **Risk:** Authentication mechanisms are weak, broken, or missing, allowing attackers to compromise passwords, keys, or session tokens, or to exploit implementation flaws to assume other users' identities.
 
@@ -402,6 +406,7 @@ angular\.js|jquery\s*["\'].*1\.|lodash.*3\.|moment\(\)|request\(  # (npm 'reques
 - Weak password policies (no minimum length, no complexity requirements, no check against breached password lists).
 - Credentials transmitted over unencrypted connections.
 - Session tokens in URLs (logged in proxies, referer headers, browser history).
+- Bearer, access, refresh, or long-lived session tokens stored in script-readable browser storage (`localStorage`, `sessionStorage`, IndexedDB) without a clear threat-model justification.
 - Session IDs that do not rotate after successful authentication.
 - Missing multi-factor authentication on privileged accounts.
 - "Remember me" tokens that never expire or use predictable values.
@@ -436,6 +441,8 @@ session\.id|sessionId|JSESSIONID|connect\.sid|session_token
 minLength.*[0-5]|passwordMinLength|min_password_length
 # Session in URL
 session.*=.*req\.query|token.*=.*req\.query|url.*session
+# Script-readable browser token storage
+localStorage\.(setItem|getItem).*token|sessionStorage\.(setItem|getItem).*token|indexedDB.*token|access_token|refresh_token
 # Missing session rotation
 regenerate|rotateSession|session\.create|session_regenerate_id
 # Certificate validation bypass
@@ -451,10 +458,22 @@ rejectUnauthorized\s*:\s*false|verify\s*=\s*False|CERT_NONE|InsecureRequestWarni
 - Implement multi-factor authentication for all users, mandatory for administrative accounts.
 - Set absolute and idle session timeouts appropriate to the application's risk profile.
 - Never expose session tokens in URLs.
+- Avoid storing bearer or refresh tokens in script-readable browser storage. Prefer `HttpOnly`, `Secure`, `SameSite` cookies or a Backend-for-Frontend pattern where feasible. If a SPA must keep a short-lived token client-side, document why refresh tokens are excluded, how XSS impact is reduced, and how token rotation/revocation is handled.
+
+#### Browser Messaging and Token Storage Review Gates
+
+Apply these additional gates when reviewing SPAs, embedded widgets, OAuth popups, checkout iframes, or browser extension integrations:
+
+- **Benign `postMessage` pattern:** Do not report a finding solely because `postMessage` is present. A message exchange is usually acceptable when the sender uses an exact `targetOrigin`, the receiver checks `event.origin` against an explicit allowlist, and `event.data` is parsed through a strict schema before any action is taken.
+- **Wildcard target origin:** Report `postMessage(..., "*")` when the payload contains checkout state, OAuth state, account-linking state, tokens, PII, or other security-sensitive data. Preview or development origins must not ship as production wildcards.
+- **Payload action validation:** Origin validation is necessary but not sufficient. Verify that `event.data.type` or `event.data.action` is allowlisted, that unexpected fields are rejected, and that redirect, account-link, payment, or privilege-changing actions require server-side confirmation.
+- **OAuth popup state:** Popup or iframe auth flows need one-time state/nonce validation in addition to origin checks. A trusted origin can still send a stale, replayed, or cross-session message if state is not bound to the initiating tab/session.
+- **Token storage sensitivity:** Distinguish non-sensitive UI preferences from bearer credentials. `localStorage` persistence increases exposure to XSS, shared-device reuse, backups, and malicious extensions; `sessionStorage` reduces persistence but remains script-readable after XSS.
+- **Preferred remediation:** Recommend `HttpOnly`/`Secure`/`SameSite` cookies, BFF token handling, short-lived access tokens without browser-stored refresh tokens, and CSP plus Trusted Types where script-readable tokens cannot be eliminated.
 
 ---
 
-### A08:2021 — Software and Data Integrity Failures
+### A08:2021 鈥?Software and Data Integrity Failures
 
 **Risk:** Code and infrastructure lack integrity verification, allowing attackers to introduce malicious updates, tamper with CI/CD pipelines, or exploit insecure deserialization.
 
@@ -502,7 +521,7 @@ curl.*\|.*sh|curl.*\|.*bash|wget.*\|.*sh|pip install.*--trusted-host
 
 ---
 
-### A09:2021 — Security Logging and Monitoring Failures
+### A09:2021 鈥?Security Logging and Monitoring Failures
 
 **Risk:** Insufficient logging, detection, and response capability allows attackers to maintain persistence, pivot, and tamper with data undetected.
 
@@ -550,7 +569,7 @@ log.*req\.body|log.*request\.getParameter|logger\.info\(.*\+.*req
 
 ---
 
-### A10:2021 — Server-Side Request Forgery (SSRF)
+### A10:2021 鈥?Server-Side Request Forgery (SSRF)
 
 **Risk:** The application fetches a remote resource based on a user-supplied URL without validating the destination, allowing attackers to reach internal services, cloud metadata endpoints, or other restricted resources.
 
@@ -585,22 +604,22 @@ url=|dest=|redirect=|uri=|callback=|src=.*http
 
 - Validate and allowlist destination URLs by scheme (https only), host, and port against a known-good list.
 - Block all requests to private and reserved IP ranges, link-local addresses, and cloud metadata endpoints at the network and application layers.
-- Do not send raw server-side responses to the client — parse expected data and return only the necessary fields.
+- Do not send raw server-side responses to the client 鈥?parse expected data and return only the necessary fields.
 - Disable HTTP redirects in server-side HTTP clients, or re-validate the destination after each redirect.
 - Deploy network-level segmentation so the application server cannot reach internal services it does not need.
 - For webhook features, validate callback URLs at registration time and again at invocation time (DNS rebinding defense).
 
 ---
 
-### Step 3 — Findings Verification and Classification
+### Step 3 鈥?Findings Verification and Classification
 
 Before finalizing findings, apply this verification checklist to each candidate finding:
 
-- [ ] **File and line reference exists** — the finding cites a specific file path and line number.
-- [ ] **Vulnerable code is confirmed** — you used `Read` to examine the actual code and confirmed the vulnerable pattern (not just a grep match).
-- [ ] **User input reaches the sink** — for injection findings, you traced that user-controlled input flows into the vulnerable function without adequate sanitization.
-- [ ] **No compensating control** — you checked for middleware, wrappers, or framework-level protections that neutralize the vulnerability.
-- [ ] **Not a test or example** — the code is production code, not a test fixture, documentation example, or intentionally vulnerable training sample.
+- [ ] **File and line reference exists** 鈥?the finding cites a specific file path and line number.
+- [ ] **Vulnerable code is confirmed** 鈥?you used `Read` to examine the actual code and confirmed the vulnerable pattern (not just a grep match).
+- [ ] **User input reaches the sink** 鈥?for injection findings, you traced that user-controlled input flows into the vulnerable function without adequate sanitization.
+- [ ] **No compensating control** 鈥?you checked for middleware, wrappers, or framework-level protections that neutralize the vulnerability.
+- [ ] **Not a test or example** 鈥?the code is production code, not a test fixture, documentation example, or intentionally vulnerable training sample.
 
 **Discard any finding that fails two or more checklist items.** Findings that fail one item should be downgraded to Informational.
 
@@ -628,10 +647,10 @@ Present findings in this structure:
 
 ### Findings
 
-#### [SEVERITY] — [Short Title]
+#### [SEVERITY] 鈥?[Short Title]
 
-- **OWASP Category:** [A0X:2021 — Category Name]
-- **CWE:** [CWE-XXX — CWE Name]
+- **OWASP Category:** [A0X:2021 鈥?Category Name]
+- **CWE:** [CWE-XXX 鈥?CWE Name]
 - **Location:** [file:line or file:function]
 - **Description:** [Clear explanation of the vulnerability, including how it could be exploited]
 - **Evidence:** [Code snippet or configuration excerpt]
@@ -698,18 +717,18 @@ This skill processes source code and configuration files that may contain advers
 
 ## References
 
-- OWASP Top 10:2021 — https://owasp.org/Top10/
-- OWASP Top 10:2021 — A01 Broken Access Control — https://owasp.org/Top10/A01_2021-Broken_Access_Control/
-- OWASP Top 10:2021 — A02 Cryptographic Failures — https://owasp.org/Top10/A02_2021-Cryptographic_Failures/
-- OWASP Top 10:2021 — A03 Injection — https://owasp.org/Top10/A03_2021-Injection/
-- OWASP Top 10:2021 — A04 Insecure Design — https://owasp.org/Top10/A04_2021-Insecure_Design/
-- OWASP Top 10:2021 — A05 Security Misconfiguration — https://owasp.org/Top10/A05_2021-Security_Misconfiguration/
-- OWASP Top 10:2021 — A06 Vulnerable and Outdated Components — https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/
-- OWASP Top 10:2021 — A07 Identification and Authentication Failures — https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
-- OWASP Top 10:2021 — A08 Software and Data Integrity Failures — https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/
-- OWASP Top 10:2021 — A09 Security Logging and Monitoring Failures — https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/
-- OWASP Top 10:2021 — A10 Server-Side Request Forgery — https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/
-- MITRE CWE List — https://cwe.mitre.org/
-- NIST SP 800-63B Digital Identity Guidelines — https://pages.nist.gov/800-63-3/sp800-63b.html
-- OWASP Cheat Sheet Series — https://cheatsheetseries.owasp.org/
-- OWASP Application Security Verification Standard (ASVS) — https://owasp.org/www-project-application-security-verification-standard/
+- OWASP Top 10:2021 鈥?https://owasp.org/Top10/
+- OWASP Top 10:2021 鈥?A01 Broken Access Control 鈥?https://owasp.org/Top10/A01_2021-Broken_Access_Control/
+- OWASP Top 10:2021 鈥?A02 Cryptographic Failures 鈥?https://owasp.org/Top10/A02_2021-Cryptographic_Failures/
+- OWASP Top 10:2021 鈥?A03 Injection 鈥?https://owasp.org/Top10/A03_2021-Injection/
+- OWASP Top 10:2021 鈥?A04 Insecure Design 鈥?https://owasp.org/Top10/A04_2021-Insecure_Design/
+- OWASP Top 10:2021 鈥?A05 Security Misconfiguration 鈥?https://owasp.org/Top10/A05_2021-Security_Misconfiguration/
+- OWASP Top 10:2021 鈥?A06 Vulnerable and Outdated Components 鈥?https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/
+- OWASP Top 10:2021 鈥?A07 Identification and Authentication Failures 鈥?https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
+- OWASP Top 10:2021 鈥?A08 Software and Data Integrity Failures 鈥?https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/
+- OWASP Top 10:2021 鈥?A09 Security Logging and Monitoring Failures 鈥?https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/
+- OWASP Top 10:2021 鈥?A10 Server-Side Request Forgery 鈥?https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/
+- MITRE CWE List 鈥?https://cwe.mitre.org/
+- NIST SP 800-63B Digital Identity Guidelines 鈥?https://pages.nist.gov/800-63-3/sp800-63b.html
+- OWASP Cheat Sheet Series 鈥?https://cheatsheetseries.owasp.org/
+- OWASP Application Security Verification Standard (ASVS) 鈥?https://owasp.org/www-project-application-security-verification-standard/
