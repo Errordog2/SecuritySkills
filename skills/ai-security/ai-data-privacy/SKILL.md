@@ -13,7 +13,7 @@ phase: [design, build, review, operate]
 frameworks: [NIST-AI-RMF-1.0, OWASP-LLM02-2025]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -76,11 +76,13 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 | Data processing agreements (DPAs) | Legal/compliance documentation | Establishes legal basis for data processing |
 | Privacy policy | Public-facing policy documents | Defines commitments to users about data handling |
 | Data retention policies | Internal governance docs, code configs | Determines how long AI-processed data persists |
+| Provider retention and telemetry settings | Provider console, DPA, API config, account support ticket, gateway logs | Proves whether inference, logging, abuse monitoring, telemetry, fine-tuning, and evaluation data are retained or disabled |
 | Logging configuration | Application code, infrastructure configs | Reveals what prompt/completion data is captured |
 | Training/fine-tuning data documentation | Data pipeline docs, dataset cards | Identifies personal data in training corpus |
 | Consent management implementation | Frontend code, API code, database schemas | Shows how user consent is captured and enforced |
 | Data classification scheme | Governance documentation | Defines sensitivity levels applied to AI data flows |
 | Regulatory requirements | Compliance documentation, legal counsel input | Identifies applicable data protection obligations |
+| De-identification and linkage-risk evidence | Data cards, redaction tests, synthetic data generation docs, embedding metadata schema | Shows whether supposedly de-identified data can still identify a person through stable IDs, metadata, attachments, or context |
 
 ---
 
@@ -145,6 +147,8 @@ Assess whether personal data is exposed, leaked, or inadequately protected in th
 - System prompts that contain PII (customer names, account numbers, internal user data hardcoded for testing or personalization).
 - Model completions returned to users without PII scanning -- the model may reproduce PII from its context or generate plausible PII from memorized training data.
 - PII transmitted to third-party LLM APIs where the provider's data handling terms are unclear or insufficient.
+- Provider "no training" claims that do not separately prove inference retention, diagnostic logging retention, abuse-monitoring retention, telemetry retention, and evaluation-data retention.
+- Evaluation pipelines or observability tools that export prompts, attachments, retrieved documents, completions, traces, or semantic context to vendor telemetry.
 
 **Detection methods using allowed tools:**
 
@@ -159,6 +163,7 @@ Grep: "output.filter|response.filter|post.process|sanitize.output" in **/*.{py,t
 
 # Check for data sent to external APIs
 Grep: "openai|anthropic|api.key|azure.openai|bedrock|vertex.ai|cohere|mistral" in **/*.{py,ts,js,yaml,yml,env}
+Grep: "telemetry|trace|eval|evaluation|observability|monitoring|abuse|diagnostic|retention|zero_data_retention" in **/*.{py,ts,js,yaml,yml,json}
 
 # Check for access control in RAG retrieval
 Grep: "metadata_filter|access_control|permission|authorization|tenant" in **/*.{py,ts,js}
@@ -172,6 +177,8 @@ Grep: "metadata_filter|access_control|permission|authorization|tenant" in **/*.{
 |---|---|
 | PII sent to third-party LLM API with no DPA or inadequate data handling terms | Critical |
 | Health data (PHI) included in prompts without HIPAA-compliant safeguards | Critical |
+| Provider retention override claimed but no console, contract, support, or gateway evidence proves it | High |
+| Evaluation or telemetry pipeline exports prompts, attachments, or semantically identifying context with only narrow redaction | High |
 | No PII detection on model completions before returning to users | High |
 | RAG retrieval returns documents across tenant or authorization boundaries | High |
 | User prompts containing PII are sent to the model without redaction | High |
@@ -226,6 +233,19 @@ Grep: "backup|snapshot|archive" in **/*.{yaml,yml,json,toml}
 | RAG source documents | Original documents with full content including PII | Align retention with document source system; propagate deletions to vector store |
 | Evaluation/test datasets | May contain real user data used for testing | Anonymize or use synthetic data; apply same retention as production data |
 
+**Retention evidence matrix:**
+
+| Data Track | Evidence Required | Common Gap |
+|---|---|---|
+| Inference prompts/completions | Provider setting, gateway logs, DPA clause, retention days, training opt-out status | "No training" claim exists but prompt logs are still retained |
+| Diagnostic and abuse monitoring | Provider retention period, access scope, deletion path, account tier exception | Abuse-monitoring logs retain PHI/PII beyond policy |
+| Application telemetry | Trace exporter config, sample trace, redaction coverage, destination, TTL | Telemetry contains full prompts, attachments, or retrieved snippets |
+| Evaluation pipelines | Eval dataset source, redaction/de-identification evidence, vendor destination, retention | Fine-tuning or support data copied into eval jobs |
+| Embeddings/vector metadata | Metadata schema, minimization proof, deletion propagation, linkage-risk test | Stable user IDs or sensitive attributes attached to vectors |
+| Fine-tuning datasets | Dataset card, consent/legal basis, retention period, deletion/unlearning process | Dataset retained indefinitely after training |
+
+Provider-level privacy statements are not enough by themselves. Record the account-specific configuration, evidence date, evidence owner, and data track covered before downgrading a retention or training-use finding.
+
 **What constitutes a finding:**
 
 | Condition | Severity |
@@ -237,6 +257,29 @@ Grep: "backup|snapshot|archive" in **/*.{yaml,yml,json,toml}
 | Backup systems retain AI data beyond primary retention period | Medium |
 | No automated purge mechanism for expired AI data | Medium |
 | Audit logs contain full prompt/completion text with no redaction | Low |
+
+### Step 3a -- Embedding Metadata and Re-identification Risk
+
+Embedding privacy review must cover both source text and metadata. Removing raw prompts is not sufficient if vector records retain stable identifiers or sensitive labels that can link the embedding back to a person.
+
+Review the following evidence:
+
+- Metadata schema for vector records, including user IDs, account IDs, ticket IDs, case numbers, dates of birth, clinic names, locations, device IDs, or other stable linkage keys.
+- Data minimization rationale for every metadata field attached to embeddings.
+- Linkage-risk test showing whether an analyst or attacker can re-identify a person by joining vector metadata with application logs, CRM data, support tickets, or public data.
+- De-identification method and test results for source text, attachments, and metadata.
+- Deletion propagation from source document to embedding, metadata row, cache, backup, and derived index.
+- Tenant and authorization filters applied before retrieval and after re-ranking.
+
+**False-positive guard:** Do not flag a synthetic or de-identified dataset solely because it uses an external provider. If the dataset source is synthetic or outside regulated scope, provider retention is disabled or contractually bounded, customer-managed keys are used where applicable, telemetry/evaluation exports are disabled or redacted, and linkage-risk evidence shows metadata cannot re-identify subjects, record the evidence and focus on any remaining data-flow gaps.
+
+**High-risk patterns:**
+
+- Vector metadata keeps stable user IDs, birth dates, clinic names, account numbers, or case numbers after source text redaction.
+- Regex-only redaction removes emails but leaves attachments, medical PDFs, free-text context, or semantic identifiers in telemetry.
+- Evaluation, analytics, or abuse-monitoring pipelines receive prompts or retrieved documents that are not covered by the inference retention setting.
+- Fine-tuning datasets are copied into evaluation or monitoring jobs with longer retention than the original training purpose.
+- "No training" is documented, but diagnostic logs, traces, or safety-review queues still retain personal data.
 
 ---
 
@@ -430,6 +473,9 @@ user input -> prompt assembly -> LLM API -> completion -> output -> logging/stor
 | Training data privacy | [Yes/Partial/No] | [description] | [severity] |
 | PII in prompts/completions | [Yes/Partial/No] | [description] | [severity] |
 | Data retention | [Yes/Partial/No] | [description] | [severity] |
+| Provider retention evidence | [Yes/Partial/No] | [inference / telemetry / eval / abuse-monitoring tracks] | [severity] |
+| Embedding metadata minimization | [Yes/Partial/No/N/A] | [linkage-risk and metadata evidence] | [severity] |
+| Telemetry and evaluation side channels | [Yes/Partial/No] | [exports, attachments, traces, redaction] | [severity] |
 | Memorization risk | [Yes/Partial/No] | [description] | [severity] |
 | EU AI Act compliance | [Yes/Partial/No/N/A] | [description] | [severity] |
 | Consent management | [Yes/Partial/No] | [description] | [severity] |
@@ -471,6 +517,19 @@ user input -> prompt assembly -> LLM API -> completion -> output -> logging/stor
 4. **Conflating data minimization with data deletion.** Data minimization (collecting only what is necessary) is a design-time principle. Data deletion (removing data when it is no longer needed or when a subject requests erasure) is an operational requirement. Both are needed. Many teams implement minimization at the application layer but fail to propagate deletion to downstream AI data stores (vector databases, training dataset snapshots, model checkpoints, conversation logs, analytics pipelines).
 
 5. **Ignoring model memorization as a privacy risk.** Organizations that use pre-trained or fine-tuned models often do not test for memorization of personal data. A model that has memorized PII from its training corpus is effectively a data store containing personal data -- it can reproduce that data on specific prompts. This has regulatory implications: if the model contains memorized PII of EU residents, GDPR obligations apply to the model weights themselves, not just the training dataset.
+
+6. **Treating "no training" as "no retention."** Provider training opt-out does not necessarily disable diagnostic logs, abuse monitoring, telemetry, traces, evaluation stores, or support queues. Review each data track separately before accepting a privacy downgrade.
+
+7. **Leaving identifiers in embedding metadata.** Embeddings may look de-identified while metadata still contains user IDs, dates, clinics, case numbers, or account labels that make re-identification easy through joins.
+
+8. **Redacting only prompts while exporting attachments and traces.** Evaluation and observability pipelines often carry documents, screenshots, PDFs, retrieved snippets, tool traces, and completions. Regex-only prompt redaction misses these side channels.
+
+---
+
+## Changelog
+
+- **1.0.1** -- Added provider retention override evidence, separate inference/telemetry/evaluation/abuse-monitoring tracks, embedding metadata minimization, linkage-risk, attachment side-channel, and de-identification evidence gates.
+- **1.0.0** -- Initial AI data privacy and governance review covering training data privacy, prompt/completion PII, retention, memorization, EU AI Act data governance, and consent management.
 
 ---
 
