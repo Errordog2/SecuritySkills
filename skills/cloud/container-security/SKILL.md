@@ -13,7 +13,7 @@ phase: [build, deploy, operate]
 frameworks: [CIS-Docker-v1.6.0, CIS-Kubernetes-v1.9.0, NIST-SP-800-190]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -62,6 +62,7 @@ NIST SP 800-190 identifies five risk categories: image risks, registry risks, or
 - NetworkPolicy definitions
 - Pod Security Standard configurations or OPA/Gatekeeper policies
 - Container registry configurations (if available)
+- Windows workload evidence when present: `spec.os.name`, `windowsOptions`, `nodeSelector`/tolerations/RuntimeClass scheduling, Windows build labels, HostProcess justification, and GMSA credential-spec authorization.
 
 ---
 
@@ -111,6 +112,8 @@ Classify findings by type: Dockerfiles, Kubernetes manifests, Helm charts, Kusto
 
 Evaluate all container and Kubernetes configurations against CIS Docker Benchmark v1.6.0, CIS Kubernetes Benchmark v1.9.0, and NIST SP 800-190 countermeasures. This covers Dockerfile security, Pod Security Standards, RBAC, Network Policies, Secrets Management, Control Plane configuration, and Container Runtime Hardening.
 
+When a workload declares `spec.os.name: windows` or uses a Windows base image, branch the Pod Security Standards review before assigning Linux findings. Do not require Linux-only controls such as Linux capabilities, seccomp, `allowPrivilegeEscalation`, or numeric `runAsUser` on Windows pods. Instead, require Windows-specific evidence for `windowsOptions.runAsUserName`, effective Windows node placement, HostProcess use, Windows Server build compatibility, and GMSA credential-spec authorization.
+
 For detailed CIS benchmark checklist items, NIST SP 800-190 countermeasure tables, and comprehensive security context evaluation criteria, see [cis-benchmarks.md](cis-benchmarks.md) in this skill directory.
 
 ---
@@ -126,8 +129,8 @@ Produce the final report using the structure defined in the Output Format sectio
 
 | Severity | Definition | Examples |
 |----------|-----------|----------|
-| **Critical** | Container escape, cluster compromise, or credential exposure | Privileged containers, Docker socket mounts, cluster-admin bound to application SA, secrets in plaintext manifests, `hostPID`/`hostNetwork` on app pods |
-| **High** | Significant security gap enabling lateral movement or privilege escalation | Running as root, missing network policies, wildcard RBAC, `allowPrivilegeEscalation: true`, host path mounts to sensitive directories |
+| **Critical** | Container escape, cluster compromise, or credential exposure | Privileged containers, Docker socket mounts, cluster-admin bound to application SA, secrets in plaintext manifests, HostProcess workloads running as `NT AUTHORITY\SYSTEM` with broad RBAC |
+| **High** | Significant security gap enabling lateral movement or privilege escalation | Running as root, missing network policies, wildcard RBAC, `allowPrivilegeEscalation: true`, host path mounts to sensitive directories, HostProcess without least-privilege identity or Windows node isolation |
 | **Medium** | Missing hardening that weakens defense-in-depth | No resource limits, mutable image tags, missing seccomp profile, read-write root filesystem, secrets as env vars |
 | **Low** | Best-practice deviation with limited immediate risk | No HEALTHCHECK in Dockerfile, ADD instead of COPY, missing liveness/readiness probes, using default namespace |
 | **Informational** | Observation with no direct security impact | Image size optimization, multi-stage build suggestions, label recommendations |
@@ -184,6 +187,14 @@ Produce the final report using the structure defined in the Output Format sectio
 |----------|-----------|-----------|------------|
 | deploy/app | production | Baseline (not Restricted) | runAsRoot, no seccomp |
 | deploy/worker | production | Privileged | privileged: true |
+
+### Windows Workload Evidence Matrix
+
+| Workload | Namespace | OS | Node placement evidence | HostProcess | Windows identity | GMSA authorization | Windows build compatibility | Status |
+|----------|-----------|----|-------------------------|-------------|------------------|--------------------|-----------------------------|--------|
+| deploy/windows-api | apps | windows | `nodeSelector`, tolerations, or RuntimeClass | No | `ContainerUser` | N/A | `node.kubernetes.io/windows-build` or RuntimeClass | Pass/Fail/Partial |
+
+For Windows workloads, explain which Linux-only Pod Security controls were not evaluated and which Windows-specific controls replaced them.
 
 ### Prioritized Remediation Plan
 
@@ -246,6 +257,8 @@ Produce the final report using the structure defined in the Output Format sectio
 | runAsNonRoot | -- | Must be true |
 | seccompProfile | -- | RuntimeDefault or Localhost |
 
+For `spec.os.name: windows`, do not blindly apply Linux-only rows such as Linux capabilities, seccomp, `allowPrivilegeEscalation`, or numeric `runAsUser`. Evaluate Windows identity, HostProcess, node placement, Windows build compatibility, and GMSA authorization instead.
+
 ---
 
 ## Common Pitfalls
@@ -257,6 +270,7 @@ Produce the final report using the structure defined in the Output Format sectio
 5. **`readOnlyRootFilesystem` breaks many applications.** When recommending this control, also recommend adding writable `emptyDir` volume mounts for directories the application needs to write to (e.g., `/tmp`, `/var/cache`).
 6. **Network policies are additive, not subtractive.** A default-deny policy must be explicitly created. Without it, all pod-to-pod traffic is allowed regardless of other NetworkPolicy resources.
 7. **Distroless images have no shell.** While this is excellent for security, note that debugging requires ephemeral containers (`kubectl debug`). Flag this as a consideration, not a problem.
+8. **Windows pods need an OS-specific branch.** Adding Linux-only fields such as seccomp, Linux capabilities, or numeric `runAsUser` to Windows manifests can break admission instead of improving security. For Windows pods, check `runAsUserName`, effective Windows scheduling, HostProcess identity, and GMSA authorization.
 
 ---
 
@@ -283,6 +297,10 @@ Produce the final report using the structure defined in the Output Format sectio
 - NIST SP 800-190 Application Container Security Guide: https://csrc.nist.gov/publications/detail/sp/800-190/final
 - Kubernetes Pod Security Standards: https://kubernetes.io/docs/concepts/security/pod-security-standards/
 - Kubernetes Pod Security Admission: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+- Kubernetes Windows containers: https://kubernetes.io/docs/concepts/windows/
+- Kubernetes HostProcess pods: https://kubernetes.io/docs/tasks/configure-pod-container/create-hostprocess-pod/
+- Kubernetes RunAsUserName for Windows pods: https://kubernetes.io/docs/tasks/configure-pod-container/configure-runasusername/
+- Kubernetes GMSA for Windows pods: https://kubernetes.io/docs/tasks/configure-pod-container/configure-gmsa/
 - Kubernetes Network Policies: https://kubernetes.io/docs/concepts/services-networking/network-policies/
 - Kubernetes RBAC: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
 - Docker Security Best Practices: https://docs.docker.com/develop/security-best-practices/
@@ -294,3 +312,4 @@ Produce the final report using the structure defined in the Output Format sectio
 ## Changelog
 
 - **1.0.0** -- Initial release. Full coverage of CIS Docker Benchmark v1.6.0 Section 4-5, CIS Kubernetes Benchmark v1.9.0 Sections 1-5, and NIST SP 800-190 countermeasures across all five risk categories.
+- **1.0.1** -- Added Windows workload branching, HostProcess identity/scheduling evidence, Windows node placement checks, GMSA authorization review, and Windows-specific output evidence to avoid Linux-only false positives.

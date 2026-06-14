@@ -264,6 +264,20 @@ Evaluate workload configurations against Kubernetes Pod Security Standards. The 
 | **Baseline** | Minimally restrictive. Prevents known privilege escalations. | Standard workloads |
 | **Restricted** | Heavily restricted. Follows current hardening best practices. | Security-sensitive and untrusted workloads |
 
+#### OS-Specific Pod Security Branch
+
+Before applying Linux Pod Security findings, determine the workload operating system:
+
+| Evidence | Linux workload | Windows workload |
+|----------|----------------|------------------|
+| OS marker | `spec.os.name` absent or `linux` | `spec.os.name: windows` or Windows base image |
+| Identity control | `runAsNonRoot`, numeric `runAsUser` | `windowsOptions.runAsUserName` |
+| Kernel controls | seccomp, Linux capabilities, `allowPrivilegeEscalation` | Not applicable; do not recommend these as Windows fixes |
+| Placement proof | Linux node selector, tolerations, RuntimeClass if needed | Windows node selector/toleration/RuntimeClass required; `spec.os.name` is not scheduling |
+| Privileged equivalent | `privileged`, host namespaces, hostPath | HostProcess plus `hostNetwork`, Windows identity, RBAC, namespace exception |
+
+If the workload is Windows, record which Linux-only controls were skipped and which Windows-specific controls were evaluated instead. This avoids false positives where adding seccomp, Linux capabilities, or numeric `runAsUser` would break admission rather than harden the pod.
+
 #### CIS 5.2.1 -- Ensure that the cluster has at least one active policy control mechanism installed
 
 Check for Pod Security Admission labels on namespaces:
@@ -321,6 +335,8 @@ spec:
 
 #### CIS 5.2.6 -- Minimize the admission of containers with allowPrivilegeEscalation
 
+Linux-only control. For Windows pods, skip this control and evaluate `windowsOptions.runAsUserName`, HostProcess, and GMSA authorization instead.
+
 ```yaml
 # REQUIRED for Restricted profile
 spec:
@@ -334,6 +350,8 @@ spec:
 
 #### CIS 5.2.7 -- Minimize the admission of root containers
 
+For Linux containers, use `runAsNonRoot` and numeric `runAsUser`. For Windows containers, use `windowsOptions.runAsUserName` and verify the account is least-privileged for the workload.
+
 ```yaml
 # REQUIRED for Restricted profile
 spec:
@@ -345,6 +363,8 @@ spec:
 ```
 
 #### CIS 5.2.8 -- Minimize the admission of containers with the NET_RAW capability
+
+Linux-only control. Windows pods do not use Linux capabilities; do not mark a Windows pod non-compliant only because capability fields are absent.
 
 ```yaml
 # GOOD: Drop all capabilities
@@ -358,6 +378,8 @@ spec:
 
 #### CIS 5.2.9 -- Minimize the admission of containers with added capabilities
 
+Linux-only control. For Windows pods, review HostProcess, Windows account identity, and GMSA/domain access instead of capability lists.
+
 ```yaml
 # BAD: Adding dangerous capabilities
 securityContext:
@@ -368,6 +390,8 @@ securityContext:
 ```
 
 #### CIS 5.2.10 -- Minimize the admission of containers with capabilities assigned
+
+Linux-only control. For Windows workloads, record this as not applicable and evaluate Windows-specific privilege evidence.
 
 Verify all containers drop ALL capabilities and only add back what is strictly needed:
 
@@ -381,7 +405,67 @@ securityContext:
 
 #### CIS 5.2.11 -- Minimize the admission of Windows HostProcess containers
 
-Check for `windowsOptions.hostProcess: true`.
+HostProcess containers run directly on the Windows host and should be treated as a privileged host-access path, not as a normal Windows container. Check both pod-level and container-level `windowsOptions`.
+
+**HostProcess evidence matrix:**
+
+| Evidence | What to verify | Risk signal |
+|----------|----------------|-------------|
+| HostProcess location | Pod-level and container-level `windowsOptions.hostProcess` across containers and init containers | Container-level override can hide a privileged path |
+| Required host networking | `hostNetwork: true` for HostProcess pods | Missing host networking can indicate an invalid or misunderstood manifest |
+| Windows identity | `windowsOptions.runAsUserName` such as `ContainerUser`, `LocalService`, `NetworkService`, local group, or `NT AUTHORITY\SYSTEM` | `NT AUTHORITY\SYSTEM` is Critical unless tightly justified |
+| Service account and RBAC | ServiceAccount, Role/ClusterRole, RoleBinding/ClusterRoleBinding permissions | Host access plus broad Kubernetes RBAC compounds impact |
+| Namespace and PSA exception | Dedicated namespace, Pod Security Admission exception, policy approval | HostProcess should not be admitted accidentally in app namespaces |
+| Windows node placement | `nodeSelector`, tolerations, or RuntimeClass scheduling for Windows nodes | `spec.os.name` alone is not scheduling evidence |
+| Windows build compatibility | `node.kubernetes.io/windows-build`, RuntimeClass, or rendered chart values | Build mismatch can force unsafe overrides or runtime failure |
+| Image provenance | Trusted registry, immutable tag/digest, vulnerability scanning | HostProcess image compromise is host compromise |
+
+**Critical pattern:**
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+spec:
+  template:
+    spec:
+      os:
+        name: windows
+      hostNetwork: true
+      serviceAccountName: windows-node-agent
+      securityContext:
+        windowsOptions:
+          hostProcess: true
+          runAsUserName: "NT AUTHORITY\\SYSTEM"
+```
+
+Flag this as Critical unless there is clear evidence of a system-level purpose, dedicated Windows node placement, least-privilege RBAC, policy exception approval, image provenance, and an operational reason that a lower-privilege identity cannot work.
+
+**Preferred evidence for ordinary Windows workloads:**
+
+```yaml
+spec:
+  os:
+    name: windows
+  nodeSelector:
+    kubernetes.io/os: windows
+  securityContext:
+    windowsOptions:
+      runAsUserName: "ContainerUser"
+```
+
+For non-HostProcess Windows app workloads, do not require Linux-only seccomp or Linux capabilities. Require Windows identity and node placement evidence.
+
+#### Windows gMSA Credential-Spec Authorization
+
+Group Managed Service Accounts add a domain identity path that is separate from normal Kubernetes service account identity. When a Windows workload uses `gmsaCredentialSpecName` or `gmsaCredentialSpec`, verify:
+
+- GMSA CRD and mutating/validating webhooks are installed and scoped as intended.
+- Only approved service accounts can `use` the referenced credential spec through RBAC.
+- The workload's `serviceAccountName` is bound to the expected GMSA credential spec and no wildcard credential-spec use is granted.
+- Domain privileges for the selected account match the application need and are not equivalent to broad domain-admin access.
+- Rendered Helm/Kustomize output preserves the intended `gmsaCredentialSpecName`, `runAsUserName`, and Windows node placement.
+
+**Finding format:** Report HostProcess and GMSA findings with Windows identity, node placement, RBAC scope, namespace/PSA exception, and Windows build compatibility evidence.
 
 #### CIS 5.2.12 -- Minimize the admission of HostPath volumes
 
@@ -610,11 +694,11 @@ Evaluate container runtime configurations against NIST SP 800-190 countermeasure
 
 | Countermeasure | What to Check |
 |---------------|---------------|
-| **CM-11:** Run as non-root | `runAsNonRoot: true`, `runAsUser: >0` |
+| **CM-11:** Run as non-root | Linux: `runAsNonRoot: true`, `runAsUser: >0`; Windows: `windowsOptions.runAsUserName` with least-privilege account |
 | **CM-12:** Use read-only root filesystem | `readOnlyRootFilesystem: true` |
 | **CM-13:** Drop all capabilities | `capabilities.drop: ["ALL"]` |
 | **CM-14:** Set resource limits | CPU and memory limits set on all containers |
-| **CM-15:** Use seccomp profiles | `seccompProfile.type: RuntimeDefault` or custom |
+| **CM-15:** Use seccomp profiles | Linux: `seccompProfile.type: RuntimeDefault` or custom; Windows: not applicable, evaluate HostProcess and Windows identity instead |
 
 **Resource limits check:**
 
@@ -649,6 +733,8 @@ securityContext:
 ## Comprehensive Security Context Evaluation
 
 For each workload (Deployment, StatefulSet, DaemonSet, Job, CronJob), evaluate the complete security context against the Restricted Pod Security Standard.
+
+Apply this Linux Restricted checklist only to Linux workloads. For Windows workloads, use the OS-specific branch in CIS 5.2: `windowsOptions.runAsUserName`, HostProcess evidence, effective Windows scheduling, Windows build compatibility, and GMSA authorization.
 
 **Restricted PSS Requirements Checklist:**
 
