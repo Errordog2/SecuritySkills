@@ -13,7 +13,7 @@ phase: [assess, operate]
 frameworks: [NIST-CSF-2.0]
 difficulty: intermediate
 time_estimate: "90-180min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -167,6 +167,14 @@ Assess:
 - Are cybersecurity roles documented in job descriptions?
 - Is the cybersecurity budget commensurate with identified risks?
 - Are cybersecurity responsibilities included in hiring, performance reviews, and termination processes?
+
+Govern accountability evidence gate:
+
+- Treat committee-based accountability as valid only when the charter, meeting cadence, decision rights, named voting or accountable members, escalation path, and retained decision records are available.
+- For risk acceptance, require an accountable executive owner, acceptance authority, review cadence, expiry or renewal rule, and linkage to the affected risk register item or organizational profile gap.
+- For policy exceptions and compensating controls, require exception owner, approver, expiry, affected CSF subcategories, trend-review owner, and evidence that recurring exceptions are reviewed at the governance level.
+- For shared services, subsidiaries, outsourced SOCs, or delegated risk owners, trace accountability from the local service owner to the central governance body and confirm who can approve residual risk.
+- Do not flag the absence of a single individual owner when a committee charter proves decision authority and names accountable roles; do flag generic committees with no owner names, decision authority, minutes, or risk-acceptance records.
 
 #### 2.3 Policy (GV.PO)
 
@@ -433,6 +441,15 @@ Use the NIST CSF 2.0 Reference Tool for comprehensive mappings.
 - Key stakeholders and expectations: [summary]
 - Critical services and dependencies: [summary]
 
+## Govern Accountability Evidence
+
+| Evidence Area | Artifact Reviewed | Accountable Role/Body | Decision Authority | Review Cadence | Freshness | Gaps |
+|---------------|-------------------|-----------------------|--------------------|----------------|-----------|------|
+| Risk acceptance | [risk register / acceptance record] | [executive owner or committee] | [approve / escalate / reject] | [cadence] | [date] | [gap] |
+| Policy exceptions | [exception tickets / exception register] | [exception owner + governance reviewer] | [approve / expire / renew] | [cadence] | [date] | [gap] |
+| CSF profile oversight | [profile review minutes / roadmap] | [profile owner or steering body] | [target profile / funding / risk decisions] | [cadence] | [date] | [gap] |
+| Delegated governance | [RACI / SLA / committee charter] | [central + local owner mapping] | [scope of delegated authority] | [cadence] | [date] | [gap] |
+
 ## Tier Assessment
 - **Current Tier**: [Tier N — Name]
   - Justification: [evidence-based rationale]
@@ -575,6 +592,8 @@ Tier 4 — Adaptive
 3. **Assessing subcategories in isolation without considering dependencies.** CSF functions are interdependent. Detection capabilities (DE) are meaningless without response capabilities (RS). Protection (PR) without asset identification (ID.AM) leaves gaps. The assessment must consider the maturity chain across functions, not just individual subcategory scores.
 
 4. **Failing to develop actionable organizational profiles.** The current and target profiles are the primary outputs of a CSF assessment. Many organizations conduct the assessment but do not formalize profiles into living documents that drive investment decisions, resource allocation, and progress tracking. Without profiles, the assessment becomes a one-time exercise rather than a continuous improvement tool.
+
+5. **Accepting governance labels without accountability evidence.** A security steering committee, exception workflow, or outsourced SOC can satisfy GV.RR and GV.OV only when evidence shows named accountable roles, decision rights, review cadence, and retained decision records. Generic committee references, stale exception tickets, or unlabeled risk acceptance notes should remain gaps until authority and ownership are proven.
 
 ---
 
